@@ -9,15 +9,18 @@ RadSafety.kr 용 **방사선·의료 관련 대한민국 법령 데이터**.
 
 ```
 data/
-  laws/          # [자동] legalize-kr raw fetch — 법률·시행령·시행규칙·부령 (주간 갱신)
-  attachments/   # [수동] 법령 별표·별지·서식, 고시·예규, 실무 가이드 PDF
-  commentary/    # [수동] 법령 해설(qmd) — RadiationSafetyNM/website 이관
-scripts/update_laws.sh            # laws 갱신 스크립트 (attachments·commentary 는 안 건드림)
-.github/workflows/update-laws.yml # 주간 cron 자동 갱신 + 수동 실행
+  laws/          # [자동·CI]      legalize-kr — 법률·시행령·시행규칙·부령 (주간 갱신, IP 무관)
+  admin-rules/   # [수동·고정IP]  법제처 OpenAPI — 원자력안전법 계통 행정규칙(고시) 24
+  attachments/   # [수동]         법령 별표·별지·서식, 고시·예규, 실무 가이드 PDF
+  commentary/    # [수동]         법령 해설(qmd) — RadiationSafetyNM/website 이관
+scripts/update_laws.sh            # laws 갱신 (legalize-kr raw fetch, IP 무관)
+scripts/update_admin_rules.sh     # admin-rules 갱신 (법제처 OpenAPI, 호출 IP 등록 필요)
+.github/workflows/update-laws.yml # laws 주간 cron 자동 갱신
 ```
 
-- **`laws/`** = 자동 갱신(legalize-kr). CI 가 매주 덮어쓴다.
-- **`attachments/`·`commentary/`** = 수동 자료. CI 무관·보존. legalize-kr 에 없는 **별표·고시·예규·가이드·해설**이 여기 있다(출처: `RadiationSafetyNM/website`).
+- **`laws/`** = 자동 갱신(legalize-kr). CI 가 매주 덮어쓴다. IP 제한 없음.
+- **`admin-rules/`** = 법제처 OpenAPI 의 **행정규칙(원안위 고시)** — legalize-kr 에 없는 *실무 기술기준*. 호출 IP 가 법제처에 등록돼야 해(CI 동적 IP 불가) **고정 IP 환경에서 수동 갱신**.
+- **`attachments/`·`commentary/`** = 수동 자료. legalize-kr 에 없는 **별표·예규·가이드·해설**(출처: `RadiationSafetyNM/website`).
 
 ## 포함 법령 (9개 법령군)
 
