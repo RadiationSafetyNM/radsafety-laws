@@ -8,10 +8,16 @@ RadSafety.kr 용 **방사선·의료 관련 대한민국 법령 데이터**.
 ## 구조
 
 ```
-data/laws/{법령명}_{구분}.md      # 법령 본문 (법률·시행령·시행규칙·부령)
-scripts/update_laws.sh            # legalize-kr raw fetch 갱신 스크립트
+data/
+  laws/          # [자동] legalize-kr raw fetch — 법률·시행령·시행규칙·부령 (주간 갱신)
+  attachments/   # [수동] 법령 별표·별지·서식, 고시·예규, 실무 가이드 PDF
+  commentary/    # [수동] 법령 해설(qmd) — RadiationSafetyNM/website 이관
+scripts/update_laws.sh            # laws 갱신 스크립트 (attachments·commentary 는 안 건드림)
 .github/workflows/update-laws.yml # 주간 cron 자동 갱신 + 수동 실행
 ```
+
+- **`laws/`** = 자동 갱신(legalize-kr). CI 가 매주 덮어쓴다.
+- **`attachments/`·`commentary/`** = 수동 자료. CI 무관·보존. legalize-kr 에 없는 **별표·고시·예규·가이드·해설**이 여기 있다(출처: `RadiationSafetyNM/website`).
 
 ## 포함 법령 (9개 법령군)
 
