@@ -9,18 +9,21 @@ RadSafety.kr 용 **방사선·의료 관련 대한민국 법령 데이터**.
 
 ```
 data/
-  laws/          # [자동·CI]      legalize-kr — 법률·시행령·시행규칙·부령 (주간 갱신, IP 무관)
-  admin-rules/   # [수동·고정IP]  법제처 OpenAPI — 원자력안전법 계통 행정규칙(고시) 24
-  attachments/   # [수동]         법령 별표·별지·서식, 고시·예규, 실무 가이드 PDF
-  commentary/    # [수동]         법령 해설(qmd) — RadiationSafetyNM/website 이관
-scripts/update_laws.sh            # laws 갱신 (legalize-kr raw fetch, IP 무관)
-scripts/update_admin_rules.sh     # admin-rules 갱신 (법제처 OpenAPI, 호출 IP 등록 필요)
-.github/workflows/update-laws.yml # laws 주간 cron 자동 갱신
+  laws/          # [자동·CI] legalize-kr — 법률·시행령·시행규칙·부령
+  admin-rules/   # [자동·CI] admrule-kr — 의료 방사선안전 삼원화 고시·예규(원안위·질병청)
+  attachments/   # [자동·CI] 법령·고시 frontmatter 의 방사선 별표·서식 PDF(law.go.kr flDownload) + 외부참고
+  commentary/    # [수동]    법령 해설(qmd) — RadiationSafetyNM/website 이관
+scripts/update_laws.sh            # laws 갱신 (legalize-kr raw fetch)
+scripts/update_admin_rules.sh     # 고시(admrule-kr) + 별표(flDownload) 갱신 — 모두 IP 무관
+scripts/_collect_admrul.py        # 고시 수집 (admrule-kr GitHub raw)
+scripts/_collect_attachments.py   # 별표 PDF 수집 (frontmatter 링크 → 공개 flDownload)
+scripts/_collect_admrul_openapi.py# (폴백) 구 법제처 OpenAPI 판 — OC+고정IP 필요
+.github/workflows/update-laws.yml # 법령·고시·별표 주간 cron 자동 갱신 (ubuntu-latest, IP 무관)
 ```
 
-- **`laws/`** = 자동 갱신(legalize-kr). CI 가 매주 덮어쓴다. IP 제한 없음.
-- **`admin-rules/`** = 법제처 OpenAPI 의 **행정규칙(원안위 고시)** — legalize-kr 에 없는 *실무 기술기준*. 호출 IP 가 법제처에 등록돼야 해(CI 동적 IP 불가) **고정 IP 환경에서 수동 갱신**.
-- **`attachments/`·`commentary/`** = 수동 자료. legalize-kr 에 없는 **별표·예규·가이드·해설**(출처: `RadiationSafetyNM/website`).
+- **`laws/`** = 자동 갱신(legalize-kr). CI 가 매주 덮어쓴다.
+- **`admin-rules/`** = **admrule-kr**(legalize-kr 자매 미러)의 의료 방사선 행정규칙(원안위·질병청 삼원화). 같은 markdown+frontmatter+git 모델이라 raw fetch — **IP 무관, CI 자동**. (구 설계는 법제처 OpenAPI 직접 호출이라 고정 IP·Oracle VM 이 필요했으나 admrule-kr 피벗으로 해소.)
+- **`attachments/`** = 법령·고시 frontmatter 의 별표 링크 중 **방사선 관련만** 공개 flDownload 로 자동 수집(IP 무관) + ICRP 등 외부 참고. `commentary/` = 수동 해설.
 
 ## 포함 법령 (9개 법령군)
 

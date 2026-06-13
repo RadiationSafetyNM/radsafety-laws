@@ -1,4 +1,4 @@
-name: Update laws
+name: Update legal data (법령·고시·별표)
 
 on:
   schedule:
@@ -10,21 +10,31 @@ permissions:
 
 jobs:
   update:
+    # 전부 IP 무관 — legalize-kr/admrule-kr raw fetch + 공개 flDownload.
+    # (구 설계의 고정 IP·Oracle VM·self-hosted runner 불필요 — admrule-kr 피벗으로 해소)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch laws from legalize-kr
+      - name: Fetch laws (legalize-kr)
         run: bash scripts/update_laws.sh data/laws
+
+      - name: Fetch admin-rules 고시 (admrule-kr)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 디렉토리 listing rate limit 60→5000
+        run: python3 scripts/_collect_admrul.py data/admin-rules
+
+      - name: Fetch attachments 별표 (law.go.kr flDownload · 공개)
+        run: python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
 
       - name: Commit if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/laws
+          git add data/laws data/admin-rules data/attachments
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"
           else
-            git commit -m "chore: 법령 갱신 $(date -u +%Y-%m-%d)"
+            git commit -m "chore: 법령·고시·별표 갱신 $(date -u +%Y-%m-%d)"
             git push
           fi
