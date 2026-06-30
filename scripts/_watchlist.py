@@ -9,6 +9,7 @@ CLI:
   python3 _watchlist.py --fetch-list   # name<TAB>type  (core 만 — update_laws.sh 소비)
   python3 _watchlist.py --fetch-list --all  # core+peripheral 전부
   python3 _watchlist.py --ids          # law_id  tier  name  type  family  (확인용)
+  python3 _watchlist.py --admrule-list # agency<TAB>kind<TAB>name  (_collect_admrul.py 소비)
 """
 import sys, os, tomllib
 
@@ -33,6 +34,17 @@ def members():
     return out
 
 
+def admrules():
+    """[{name, kind, agency, parent}] — 명시 고시·예규·훈령 목록.
+
+    고시 선별은 키워드 sweep 이 동음이의(방호=경비, 방재=재난) 노이즈로 불가 → 명시 큐레이션.
+    fetch 경로(admrule-kr) = <agency>/<kind>/<name>/본문.md"""
+    with open(PATH, 'rb') as f:
+        cfg = tomllib.load(f)
+    return [dict(name=a['name'], kind=a['kind'], agency=a['agency'],
+                 parent=a.get('parent', '')) for a in cfg.get('admrule', [])]
+
+
 def main(argv):
     ms = members()
     if '--fetch-list' in argv:
@@ -45,6 +57,9 @@ def main(argv):
     elif '--ids' in argv:
         for m in ms:
             print(f"{m['law_id']}\t{m['tier']}\t{m['name']}\t{m['type']}\t{m['family']}")
+    elif '--admrule-list' in argv:
+        for a in admrules():
+            print(f"{a['agency']}\t{a['kind']}\t{a['name']}")
     else:
         print(__doc__)
         core = sum(1 for m in ms if m['tier'] == 'core')
