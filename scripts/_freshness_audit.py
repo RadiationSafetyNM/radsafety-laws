@@ -70,8 +70,15 @@ dfmt = lambda s: f'{s[:4]}-{s[4:6]}-{s[6:8]}' if len(s) == 8 and s.isdigit() els
 print(f"{'법령':<32}{'우리MST':>8}{'API최신MST':>9}{'우리공포':>12}{'API최신공포':>12}  판정")
 print('-' * 100)
 sync = stale = other = 0
-for m in members():
+all_members = members()
+core_members = [m for m in all_members if m['tier'] == 'core']
+peripheral_members = [m for m in all_members if m['tier'] != 'core']
+for m in core_members:
     label = f"{m['name']} {m['type']}".replace(' 법률', '')
+    if not (m['law_id'] or '').strip():
+        print(f"{label[:31]:<32}{'-':>8}{'-':>9}{'-':>12}{'-':>12}  ID미정 ⏳ backfill 대기")
+        other += 1
+        continue
     path = os.path.join(LAWDIR, f"{m['name']}_{m['type']}.md")
     law_id = (m['law_id'] or '').zfill(6)
     if not os.path.exists(path):
@@ -105,4 +112,35 @@ for m in members():
         else: other += 1
     print(f"{label[:31]:<32}{our_mst:>8}{api_mst:>9}{dfmt(our_pub):>12}{dfmt(api_pub):>12}  {verdict}")
 print('-' * 100)
-print(f"합계 {sync+stale+other}건 — SYNC {sync} / STALE {stale} / 기타 {other}")
+print(f"합계 {sync+stale+other}건 (core whole-law) — SYNC {sync} / STALE {stale} / 기타 {other}")
+if peripheral_members:
+    # Interim 모니터링(§docs/watchlist-classification.md §6): peripheral 도 MST 추적하되
+    # 개정 시 STALE 이 아니라 REVIEW nudge — "방사선 조 영향 확인 要"(자동 키워드 판정은 Full 후속).
+    print()
+    print("[PERIPHERAL — 주변법 개정 시 REVIEW nudge (방사선 조 영향 수동확인 · STALE 노이즈 제외)]")
+    review = 0
+    for m in peripheral_members:
+        label = f"{m['name']} {m['type']}".replace(' 법률', '')
+        wa = '; '.join(m['watch_articles']) if m['watch_articles'] else '-'
+        if not (m['law_id'] or '').strip():
+            print(f"  {label[:40]:<42} ID미정 ⏳")
+            continue
+        path = os.path.join(LAWDIR, f"{m['name']}_{m['type']}.md")
+        if not os.path.exists(path):
+            print(f"  {label[:40]:<42} 파일없음(미수집)")
+            continue
+        d = fm(path)
+        our_mst = d.get('법령MST', '')
+        our_pub = (d.get('공포일자', '') or '').replace('-', '')
+        qname = f"{m['name']} {m['type']}" if m['type'] in ('시행령', '시행규칙') else m['name']
+        best, err = latest_promulgated(qname, (m['law_id'] or '').zfill(6))
+        if best is None:
+            print(f"  {label[:40]:<42} 조회실패 {err or 'ID미매칭'}")
+        elif best['mst'] == our_mst:
+            print(f"  {label[:40]:<42} SYNC ✓")
+        elif best['pub'] > our_pub:
+            print(f"  {label[:40]:<42} REVIEW ⚠ 개정({dfmt(best['pub'])}) — 방사선 조 영향 확인 要 · watch: {wa}")
+            review += 1
+        else:
+            print(f"  {label[:40]:<42} SYNC ✓ (우리=시행예정 최신)")
+    print(f"  → REVIEW {review}건 (방사선 조 변경 여부 수동 확인 필요)")

@@ -8,7 +8,8 @@ DST="${1:-data/laws}"
 mkdir -p "$DST"
 
 # 감시 대상 목록은 watchlist.toml(단일 권위)에서 읽는다 — 하드코딩 금지.
-# _watchlist.py --fetch-list 가 'name<TAB>type' 행을 내보낸다.
+# --fetch-list --all = core+peripheral 전부(의료 중심이라 peripheral 도 의료법 → 코퍼스·
+# peripheral REVIEW 기준치 둘 다에 필요). core 만 원하면 --all 제거.
 ok=0; fail=0
 while IFS=$'\t' read -r law typ; do
   [ -z "$law" ] && continue
@@ -17,7 +18,7 @@ while IFS=$'\t' read -r law typ; do
   else
     echo "✗ 실패: $law/$typ" >&2; fail=$((fail+1))
   fi
-done < <(python3 "$(dirname "$0")/_watchlist.py" --fetch-list)
+done < <(python3 "$(dirname "$0")/_watchlist.py" --fetch-list --all)
 
 echo "갱신 완료: ${ok}개 성공, ${fail}개 실패"
 [ "$fail" -eq 0 ]
