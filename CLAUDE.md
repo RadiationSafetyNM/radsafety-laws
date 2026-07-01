@@ -35,7 +35,8 @@ scripts/
   update_admin_rules.sh      # 고시(admrule-kr) + 별표(flDownload) 수집 + 별표 md 파싱 — 수집부는 IP 무관
   _collect_admrul.py         # 고시 수집 (admrule-kr GitHub raw)
   _collect_attachments.py    # 별표 원본(HWP/HWPX)+PDF 수집 (frontmatter 파일링크·PDF링크 → 공개 flDownload)
-  _parse_attachments.py      # 별표 원본 → 구조보존 markdown. 도구(soffice/pandoc) 없으면 자동 skip(CI 안전)
+  _parse_attachments.py      # 별표 원본 → 구조보존 markdown. 도구(soffice/pandoc) 없으면 자동 skip(CI 안전).
+                             #   docx 변환 손실(md 본문 ≪ PDF 텍스트) 시 PDF 텍스트로 폴백(parse_note: pdf_fallback)
   _build_forms_registry.py   # 서식·별지 메타 레지스트리 생성(순수 python, 수집기와 동일 게이트 → disk 1:1)
   _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 설계 — 조 기본·긴 조는 항 분할, 메타 6필드, 조↔별표·서식 링크)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.

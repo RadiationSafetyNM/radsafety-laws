@@ -59,6 +59,22 @@ def clean_md(body):
     return re.sub(r'\n{3,}', '\n\n', body).strip()
 
 
+def text_len(s):
+    """마크업 제외 순수 텍스트 길이(HWP md ↔ PDF 텍스트 비교용)."""
+    s = re.sub(r'<[^>]+>', '', s)
+    s = re.sub(r'[#*|\\_-]', '', s)
+    return len(re.sub(r'\s+', '', s))
+
+
+def pdf_text(path):
+    """원본 PDF 의 pdftotext -layout 결과(변환 손실 폴백용)."""
+    try:
+        return subprocess.run(['pdftotext', '-layout', path, '-'],
+                              capture_output=True, text=True, timeout=30).stdout.strip()
+    except Exception:
+        return ''
+
+
 # 별표 원본 수집(hwpx 우선, 같은 stem 은 하나만)
 byname = {}
 for fn in sorted(os.listdir(SRC)):
@@ -86,7 +102,7 @@ try:
         ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + srcfiles,
         check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
-    ok, fail, no_table = 0, [], []
+    ok, fail, no_table, recovered, flagged = 0, [], [], [], []
     fmt = Counter()
     for stem in sorted(byname):
         srcfn = byname[stem]
@@ -100,12 +116,27 @@ try:
             ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
             capture_output=True, text=True).stdout
         body = clean_md(raw)
+        # 3) 파싱 손실 감지 + PDF 폴백: docx 변환이 표를 누락(md 본문이 PDF 대비 현저히 적음)하면
+        #    원본 PDF 텍스트로 본문 대체(완전성 우선 — 구조<완전성). PDF 없으면 경고만.
+        note = ''
+        pdfp = os.path.join(SRC, stem + '.pdf')
+        if os.path.exists(pdfp):
+            ptxt = pdf_text(pdfp)
+            ml, pl = text_len(body), text_len(ptxt)
+            if pl > ml * 1.8 and pl - ml > 150:
+                body = ptxt
+                note = 'pdf_fallback'   # docx 변환 누락 → PDF 텍스트로 복구
+                recovered.append((stem, ml, pl))
+        elif text_len(body) < 100:
+            note = 'short_no_pdf'        # PDF 없음 + 본문 빈약 → 수동 조사 대상
+            flagged.append(stem)
         title, parent, arts = meta_from_name(stem)
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
         fmt[ext] += 1
+        note_line = f'parse_note: {note}\n' if note else ''
         fm = (f'---\ntype: 별표\ntitle: "{title}"\nparent_law: "{parent}"\n'
               f'delegating_articles: {yaml_list(arts)}\n'
-              f'source: "{srcfn}"\nsource_format: {ext}\n---\n\n')
+              f'source: "{srcfn}"\nsource_format: {ext}\n{note_line}---\n\n')
         open(out, 'w', encoding='utf-8').write(fm + body + '\n')
         ok += 1
         if '<table' not in body and '|' not in body:   # 표 자체가 없음 = 순수 텍스트형
@@ -117,8 +148,12 @@ try:
     print(f'평균 {total_bytes // max(ok, 1)} bytes/파일 (총 {total_bytes} bytes)')
     if fail:
         print('  ✗ 실패:', *[f'\n     - {s}' for s in fail])
-    print(f'\n표 미검출(순수 텍스트형) {len(no_table)}개:')
-    for s in no_table:
-        print(f'     - {s}')
+    print(f'\nPDF 폴백 복구(docx 손실 → PDF 텍스트) {len(recovered)}개:')
+    for s, ml, pl in recovered:
+        print(f'     - md {ml}자 → PDF {pl}자 | {s[:60]}')
+    if flagged:
+        print(f'\n⚠ PDF 없음 + 본문 빈약(수동 조사) {len(flagged)}개:')
+        for s in flagged:
+            print(f'     - {s}')
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
