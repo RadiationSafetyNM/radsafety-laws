@@ -10,5 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/_collect_admrul.py data/admin-rules
 python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
+# 서식·별지 메타 레지스트리(빈 양식 카탈로그) — 순수 python, IP·도구 무관(CI 가능).
+python3 scripts/_build_forms_registry.py data/laws data/admin-rules data/attachments data/attachments-forms-registry.md
 # 별표 원본(HWP/HWPX) → 구조보존 markdown. soffice(+H2Orestart)·pandoc 없으면 자동 skip.
 python3 scripts/_parse_attachments.py data/attachments data/attachments-parsed
