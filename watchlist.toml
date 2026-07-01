@@ -133,12 +133,14 @@ members = [
 # ── 진단용방사선규칙 계통 (영상의학 — 질병청) ──
 [[admrule]]
 name = "진단용 방사선 안전관리 규정"
+admrule_id = "73900"
 kind = "고시"
 agency = "보건복지부/질병관리청"
 parent = "진단용방사선발생장치의안전관리에관한규칙"
 
 [[admrule]]
 name = "진단용 방사선 안전관리책임자에 대한 교육 및 교육기관 지정"
+admrule_id = "73902"
 kind = "고시"
 agency = "보건복지부/질병관리청"
 parent = "진단용방사선발생장치의안전관리에관한규칙"
@@ -146,78 +148,91 @@ parent = "진단용방사선발생장치의안전관리에관한규칙"
 # ── 원자력안전법 계통 (핵의학·방종 — 원안위) ──
 [[admrule]]
 name = "의료분야의 방사선안전관리에 관한 기술기준"
+admrule_id = "20692"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "개인 피폭방사선량의 평가 및 관리에 관한 규정"
+admrule_id = "20697"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "내부피폭방사선량의 측정 및 산출에 관한 규정"
+admrule_id = "35193"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "외부피폭선량 판독에 관한 품질보증계획서 작성 기준"
+admrule_id = "20696"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선방호 등에 관한 기준"
+admrule_id = "35174"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선원의 누설점검에 관한 기술기준"
+admrule_id = "35184"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선발생장치에서 제외되는 용도 및 용량 등에 관한 규정"
+admrule_id = "35171"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성동위원소에서 제외되는 물질 등에 관한 규정"
+admrule_id = "20680"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성동위원소 보안관리에 관한 규정"
+admrule_id = "2082485"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성동위원소등의 생산에 관한 기준"
+admrule_id = "35187"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성동위원소 판매자의 준수 규정"
+admrule_id = "35188"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선안전보고서 작성지침"
+admrule_id = "35177"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선안전관리 업무대행 권역구분 및 업무대행규정 작성지침"
+admrule_id = "43195"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -225,24 +240,28 @@ parent = "원자력안전법"
 # ── 정의·검사·종사자선량 (의료 RI/기기/종사자 직접 — 2026-06-30 추가) ──
 [[admrule]]
 name = "방사선기기의 설계승인 및 검사에 관한 기준"
+admrule_id = "35183"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사선발생장치 추가 적용대상에 관한 규정"
+admrule_id = "35170"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성동위원소등의 허가사용자 및 업무대행자에 대한 정기검사 면제에 관한 규정"
+admrule_id = "35173"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "판독업무 등록기준 및 검사에 관한 규정"
+admrule_id = "35189"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -251,6 +270,7 @@ parent = "원자력안전법"
 # 근거 원안법 시행규칙 §58⑤, 적용 = 방사성동위원소·방사선발생장치 허가신청자 안전관리규정 작성.
 [[admrule]]
 name = "안전관리규정 작성지침"
+admrule_id = "20686"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -258,6 +278,7 @@ parent = "원자력안전법"
 # RI 취급자 위탁업무 자격(방사성동위원소취급자면허 등). 원전 면허 혼재하나 Dr. Ben 포함 결정(2026-06-30).
 [[admrule]]
 name = "위탁업무취급자의 자격기준"
+admrule_id = "20718"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -265,6 +286,7 @@ parent = "원자력안전법"
 # 법규 3단 정독으로 보강(영§118 위임) — 방사성동위원소취급자·방사선취급감독자 면허 경력(핵의학 RI 면허). 2026-06-30.
 [[admrule]]
 name = "원자력관계 면허시험 시행에 따른 경력(교육훈련 포함)의 내용 및 산출방법 등에 관한 규정"
+admrule_id = "20716"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -273,12 +295,14 @@ parent = "원자력안전법"
 # E(원전 폐기물)로 오분류했으나 핵의학과도 RI 자체처분(decay-in-storage)·운반에 직접 적용.
 [[admrule]]
 name = "방사성폐기물 분류 및 자체처분 기준에 관한 규정"
+admrule_id = "20711"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
 
 [[admrule]]
 name = "방사성물질등의 포장 및 운반에 관한 규정"
+admrule_id = "35212"
 kind = "고시"
 agency = "국무총리/원자력안전위원회"
 parent = "원자력안전법"
@@ -287,12 +311,14 @@ parent = "원자력안전법"
 # 특수의료장비규칙 §6의2(품질관리검사기관)·§2(대상 장비 지정)가 위임. CT·유방촬영 QA.
 [[admrule]]
 name = "특수의료장비 품질관리검사기관의 등록 등에 관한 규정"
+admrule_id = "51833"
 kind = "고시"
 agency = "보건복지부/_본부"
 parent = "특수의료장비의설치및운영에관한규칙"
 
 [[admrule]]
 name = "보건의료 시책상 필요한 특수의료장비"
+admrule_id = "26333"
 kind = "고시"
 agency = "보건복지부/_본부"
 parent = "특수의료장비의설치및운영에관한규칙"
