@@ -1,0 +1,21 @@
+# 바이너리 자산 — Windows 체크아웃 시 CRLF 변환/텍스트 정규화로 인한 손상 방지.
+# (지금까지 .gitattributes 부재로 .hwp/.hwpx/.pdf 가 Windows git 에서 깨질 수 있었음)
+*.hwp   binary
+*.hwpx  binary
+*.pdf   binary
+*.doc   binary
+*.docx  binary
+*.xlsx  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+
+# 텍스트 자산 — LF 고정(플랫폼 무관 일관성)
+*.md    text eol=lf
+*.py    text eol=lf
+*.sh    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.jsonl text eol=lf
