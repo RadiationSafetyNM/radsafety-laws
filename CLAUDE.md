@@ -28,6 +28,7 @@ data/
                  #   (2026-07-01~ 원본 추가. 원본=파싱 충실도, PDF=비전 대조·폴백. 같은 stem·확장자만 다름)
   attachments-parsed/  # [자동·로컬] 별표 원본 → 구조보존 markdown (soffice+H2Orestart→docx→pandoc)
   attachments-forms-registry.md  # [자동·CI] 서식·별지 메타 카탈로그(빈 양식 — 본문 파싱 ✗, 제목·근거조·링크만)
+  chunks/law_chunks.jsonl  # [자동·CI] 조 단위 RAG 청크(content+metadata). 임베딩 전 단계 — pwa 가 소비
 scripts/
   _watchlist.py              # watchlist.toml 로더(tomllib·stdlib) — fetch·audit 양쪽에 공급
   update_laws.sh             # laws 갱신 (legalize-kr raw fetch) — 목록은 _watchlist.py 에서 읽음(하드코딩 제거)
@@ -36,6 +37,7 @@ scripts/
   _collect_attachments.py    # 별표 원본(HWP/HWPX)+PDF 수집 (frontmatter 파일링크·PDF링크 → 공개 flDownload)
   _parse_attachments.py      # 별표 원본 → 구조보존 markdown. 도구(soffice/pandoc) 없으면 자동 skip(CI 안전)
   _build_forms_registry.py   # 서식·별지 메타 레지스트리 생성(순수 python, 수집기와 동일 게이트 → disk 1:1)
+  _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 설계 — 조 기본·긴 조는 항 분할, 메타 6필드, 조↔별표·서식 링크)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
 .github/workflows/update-laws.yml  # 주간 cron 자동 갱신 (월 03:00 KST / ubuntu-latest)

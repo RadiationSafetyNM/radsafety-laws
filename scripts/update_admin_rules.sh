@@ -14,3 +14,6 @@ python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachme
 python3 scripts/_build_forms_registry.py data/laws data/admin-rules data/attachments data/attachments-forms-registry.md
 # 별표 원본(HWP/HWPX) → 구조보존 markdown. soffice(+H2Orestart)·pandoc 없으면 자동 skip.
 python3 scripts/_parse_attachments.py data/attachments data/attachments-parsed
+# 조 단위 RAG 청크(JSONL) — 법령+고시 조 청킹 + 별표·서식 링크. 순수 python(CI 가능).
+# 커밋된 attachments-parsed 를 읽어 별표 연결 유지(파싱 skip 되는 CI 에서도 링크 보존).
+python3 scripts/_build_chunks.py data/laws data/admin-rules data/attachments-parsed data/chunks/law_chunks.jsonl
