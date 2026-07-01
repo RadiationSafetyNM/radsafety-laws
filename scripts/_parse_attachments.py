@@ -12,7 +12,8 @@
 전제: LibreOffice(soffice) + H2Orestart 확장 설치(사용자 프로필). pandoc 설치.
 사용: python3 scripts/_parse_attachments.py [attachments폴더] [출력폴더]
 """
-import sys, os, re, subprocess, tempfile, shutil
+import sys, os, re, subprocess, tempfile, shutil, zipfile
+import xml.etree.ElementTree as ET
 from collections import Counter
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else 'data/attachments'
@@ -91,6 +92,84 @@ def char_bag(s):
     return Counter(s)
 
 
+# ── OWPML(hwpx) 직접 파싱 — LibreOffice 우회(H2Orestart 가 표를 버리는 문제 근본 해결) ──
+# hwpx = OWPML(개방형 XML) zip. Contents/section*.xml 을 직접 파싱해 문단+표(HTML) 복원.
+def _ln(tag):
+    return tag.split('}')[-1]
+
+
+def _owpml_ptext(p):
+    return ''.join(''.join(t.itertext()) for t in p.iter() if _ln(t.tag) == 't')
+
+
+def _owpml_has_tbl(e):
+    return any(_ln(d.tag) == 'tbl' for d in e.iter())
+
+
+def _owpml_cell(tc):
+    sub = next((c for c in tc if _ln(c.tag) == 'subList'), None)
+    if sub is None:
+        return ''
+    out = []
+    for p in sub:
+        if _ln(p.tag) != 'p':
+            continue
+        if _owpml_has_tbl(p):
+            _owpml_walk(p, out)              # 중첩 표는 HTML 그대로(개행 유지)
+        else:
+            t = _owpml_ptext(p).strip()
+            if t:
+                out.append(t)
+    return '\n'.join(out)
+
+
+def _owpml_table(tbl):
+    rows = ['<table>']
+    for tr in (c for c in tbl if _ln(c.tag) == 'tr'):
+        rows.append('<tr>')
+        for tc in (c for c in tr if _ln(c.tag) == 'tc'):
+            span = next((c for c in tc if _ln(c.tag) == 'cellSpan'), None)
+            cs = int(span.get('colSpan', '1')) if span is not None else 1
+            rs = int(span.get('rowSpan', '1')) if span is not None else 1
+            a = (f' colspan="{cs}"' if cs > 1 else '') + (f' rowspan="{rs}"' if rs > 1 else '')
+            rows.append(f'<td{a}>{_owpml_cell(tc)}</td>')
+        rows.append('</tr>')
+    rows.append('</table>')
+    return '\n'.join(rows)
+
+
+def _owpml_walk(elem, out):
+    for ch in elem:
+        ln = _ln(ch.tag)
+        if ln == 'tbl':
+            out.append(_owpml_table(ch))
+        elif ln == 'p':
+            if _owpml_has_tbl(ch):
+                _owpml_walk(ch, out)
+            else:
+                t = _owpml_ptext(ch).strip()
+                if t:
+                    out.append(t)
+        else:
+            _owpml_walk(ch, out)
+
+
+def parse_hwpx(path):
+    """hwpx → 문단+표(HTML) markdown. 실패 시 '' (호출부가 폴백)."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            secs = sorted(n for n in z.namelist()
+                          if re.match(r'Contents/section\d+\.xml', n))
+            out = []
+            for n in secs:
+                _owpml_walk(ET.fromstring(z.read(n)), out)
+        return re.sub(r'\n{3,}', '\n\n', '\n\n'.join(out)).strip()
+    except Exception as e:
+        print(f'  ? OWPML 파싱 실패({e}) → docx 폴백: {os.path.basename(path)[:40]}',
+              file=sys.stderr)
+        return ''
+
+
 # 별표 원본 수집(hwpx 우선, 같은 stem 은 하나만)
 byname = {}
 for fn in sorted(os.listdir(SRC)):
@@ -113,25 +192,38 @@ if not srcfiles:
 os.makedirs(DST, exist_ok=True)
 tmp = tempfile.mkdtemp(prefix='hwpparse_')
 try:
-    # 1) 배치 docx 변환 (soffice 단일 프로세스 — H2Orestart 등록된 실제 프로필 사용, HOME 미변경)
-    subprocess.run(
-        ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + srcfiles,
-        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
+    # 1) 배치 docx 변환 — **hwp(바이너리)만** soffice 로. hwpx 는 OWPML 직접 파싱(2단계).
+    hwp_srcs = [p for p in srcfiles if p.lower().endswith('.hwp')]
+    if hwp_srcs:
+        subprocess.run(
+            ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + hwp_srcs,
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
     ok, fail, no_table, recovered, flagged, diverged = 0, [], [], [], [], []
     fmt = Counter()
     for stem in sorted(byname):
         srcfn = byname[stem]
-        docx = os.path.join(tmp, stem + '.docx')
         out = os.path.join(DST, stem + '.md')
-        if not os.path.exists(docx) or os.path.getsize(docx) < 200:
-            fail.append(stem)
-            continue
-        # 2) docx → gfm markdown(pandoc docx 리더 = 깨끗) → 정리
-        raw = subprocess.run(
-            ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
-            capture_output=True, text=True).stdout
-        body = clean_md(raw)
+        ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
+        # 2) 본문 추출 — hwpx: OWPML 직접(LibreOffice 우회) / hwp: docx→pandoc
+        if ext == 'hwpx':
+            body = parse_hwpx(os.path.join(SRC, srcfn))
+            if not body:                       # OWPML 실패 시 docx 폴백 시도
+                subprocess.run(['soffice', '--headless', '--convert-to', 'docx',
+                                '--outdir', tmp, os.path.join(SRC, srcfn)],
+                               check=False, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=300)
+        else:
+            body = ''
+        if not body:
+            docx = os.path.join(tmp, stem + '.docx')
+            if not os.path.exists(docx) or os.path.getsize(docx) < 200:
+                fail.append(stem)
+                continue
+            raw = subprocess.run(
+                ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
+                capture_output=True, text=True).stdout
+            body = clean_md(raw)
         # 3) 파싱 손실 감지 — 3층(원본 PDF 대비). 행동 차등:
         #    · 길이 대량손실(pl≫ml)      → PDF 텍스트로 본문 대체(pdf_fallback, 완전성 확실·비가역)
         #    · 문자다중집합 divergence   → 주 감지기. 순서·분절 무관, 텍스트+숫자 전부.
