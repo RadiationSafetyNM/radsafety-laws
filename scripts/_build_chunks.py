@@ -90,21 +90,69 @@ def _slice(body, pat):
     return out
 
 
-def split_hang(text):
-    """긴 조 → 항(①②…) 단위. 첫 항 앞 서두는 항0 로."""
-    pat = re.compile(rf'(?:\*\*)?([{CIRCLED}])(?:\*\*)?')
-    ms = list(pat.finditer(text))
-    if len(ms) < 2:
-        return [('', text)]
-    parts = []
-    if ms[0].start() > 0:
-        head = text[:ms[0].start()].strip()
+HO = re.compile(r'(?m)^\s*(\d+)\\?\.\s')   # 호 마커: 줄 시작 "N." 또는 "N\."(법령 이스케이프)
+
+
+def _pack_ho(text):
+    """호(1. 2. …)를 MAXCHARS 이하로 greedy 패킹 → [(라벨, 조각)]. 호<2 면 []."""
+    om = list(HO.finditer(text))
+    if len(om) < 2:
+        return []
+    raw = []
+    if om[0].start() > 0:
+        head = text[:om[0].start()].strip()
         if head:
-            parts.append(('', head))
-    for i, m in enumerate(ms):
-        end = ms[i + 1].start() if i + 1 < len(ms) else len(text)
-        parts.append((m.group(1), text[m.start():end].strip()))
+            raw.append((None, head))
+    for i, m in enumerate(om):
+        end = om[i + 1].start() if i + 1 < len(om) else len(text)
+        raw.append((m.group(1), text[m.start():end].strip()))
+    parts, cur, nums, clen = [], [], [], 0
+
+    def flush():
+        if not cur:
+            return
+        ns = [n for n in nums if n]
+        lab = (f'제{ns[0]}호~제{ns[-1]}호' if len(ns) > 1
+               else (f'제{ns[0]}호' if ns else ''))
+        parts.append((lab, '\n'.join(cur).strip()))
+
+    for num, seg in raw:
+        if cur and clen + len(seg) > MAXCHARS:
+            flush()
+            cur, nums, clen = [], [], 0
+        cur.append(seg)
+        nums.append(num)
+        clen += len(seg)
+    flush()
     return parts
+
+
+def split_long(text):
+    """긴 조 분할 — (subunit라벨, 조각) 리스트.
+    ① 항(①②…) 있으면 각 항이 한 청크. 오버사이즈 항은 내부 호로 재분할(항+호 라벨).
+    ② 항 없고 호만 있으면 호를 MAXCHARS 이하로 패킹.
+    ③ 둘 다 없으면 통짜."""
+    hm = list(re.finditer(rf'(?:\*\*)?([{CIRCLED}])(?:\*\*)?', text))
+    if len(hm) >= 2:
+        segs = []
+        if hm[0].start() > 0:
+            head = text[:hm[0].start()].strip()
+            if head:
+                segs.append(('', head))
+        for i, m in enumerate(hm):
+            end = hm[i + 1].start() if i + 1 < len(hm) else len(text)
+            segs.append((m.group(1), text[m.start():end].strip()))
+        out = []
+        for lab, seg in segs:                 # 오버사이즈 항은 호로 재분할
+            if len(seg) > MAXCHARS:
+                ho = _pack_ho(seg)
+                if len(ho) >= 2:
+                    out.extend((f'{lab} {hl}'.strip(), hs) for hl, hs in ho)
+                    continue
+            out.append((lab, seg))
+        return out
+    ho = _pack_ho(text)
+    return ho if ho else [('', text)]
 
 
 def build(path, doctype):
@@ -143,14 +191,14 @@ def build(path, doctype):
         art_no = norm_article(art)
         atts = att_map.get((stem, art_no), [])
         forms = list(dict.fromkeys(re.findall(r'별지 제\d+호(?:의\d+)?서식', text)))
-        # 긴 조는 항 분할
-        segs = split_hang(text) if len(text) > MAXCHARS else [('', text)]
-        for hang, seg in segs:
+        # 긴 조는 항→호 순으로 분할(MAXCHARS 이하)
+        segs = split_long(text) if len(text) > MAXCHARS else [('', text)]
+        for sub, seg in segs:
             head = f'「{title}」 {art}' + (f'({atitle})' if atitle else '')
-            if hang:
-                head += f' {hang}'
+            if sub:
+                head += f' {sub}'
             content = head + '\n\n' + seg
-            cid = f'{law_id}#{art}' + (f'_{hang}' if hang else '')
+            cid = f'{law_id}#{art}' + (f'_{sub}' if sub else '')
             recs.append({
                 'chunk_id': cid,
                 'content': content,
@@ -158,7 +206,7 @@ def build(path, doctype):
                     'law_id': law_id, 'law_mst': mst, 'law_title': title,
                     'jurisdiction': juris, 'legal_hierarchy': hier,
                     'document_type': doctype, 'article': art,
-                    'article_title': atitle, 'hang': hang,
+                    'article_title': atitle, 'subunit': sub,
                     'enforce_date': enforce, 'promulgate_date': promul,
                     'status': status,
                     'associated_attachments': atts,
@@ -190,11 +238,13 @@ by_j = Counter(r['metadata']['jurisdiction'] for r in allrecs)
 by_h = Counter(r['metadata']['legal_hierarchy'] for r in allrecs)
 w_att = sum(1 for r in allrecs if r['metadata']['associated_attachments'])
 w_form = sum(1 for r in allrecs if r['metadata']['referenced_forms'])
-split = sum(1 for r in allrecs if r['metadata']['hang'])
-avg = sum(len(r['content']) for r in allrecs) // max(len(allrecs), 1)
+split = sum(1 for r in allrecs if r['metadata']['subunit'])
+lens = [len(r['content']) for r in allrecs]
+avg = sum(lens) // max(len(allrecs), 1)
+over = sum(1 for x in lens if x > MAXCHARS + 400)   # 분할 후에도 큰 청크(항/호 없는 통짜)
 print(f'청크 {len(allrecs)}개 → {OUT} (삭제 조 {deleted[0]}개 제외)')
 print(f'  document_type: {dict(by_dt)}')
 print(f'  jurisdiction:  {dict(by_j)}')
 print(f'  legal_hierarchy: {dict(by_h)}')
-print(f'  별표 연결 청크: {w_att} · 서식 참조 청크: {w_form} · 항 분할 청크: {split}')
-print(f'  평균 content 길이: {avg}자')
+print(f'  별표 연결 청크: {w_att} · 서식 참조 청크: {w_form} · 항/호 분할 청크: {split}')
+print(f'  평균 content 길이: {avg}자 · 최대 {max(lens)}자 · MAXCHARS+400 초과(통짜) {over}개')

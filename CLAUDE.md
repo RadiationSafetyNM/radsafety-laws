@@ -49,7 +49,7 @@ scripts/
                              #   문자다중집합 divergence(순서·분절 무관, 주 감지)→char_diverge, 숫자집합→num_diverge(가중 오버레이),
                              #   PDF무+빈약→short_no_pdf. diverge 는 검토 플래그(자동교체 안 함). 순서민감 diff·어절집합은 오탐이라 배제.
   _build_forms_registry.py   # 서식·별지 메타 레지스트리 생성(순수 python, 수집기와 동일 게이트 → disk 1:1)
-  _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 설계 — 조 기본·긴 조는 항 분할, 메타 6필드, 조↔별표·서식 링크)
+  _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 — 조 기본·긴 조는 항→호 분할(문자수 분할 금지), 메타 6필드, 조↔별표·서식 링크)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
 .github/workflows/update-laws.yml  # 주간 cron 자동 갱신 (월 03:00 KST / ubuntu-latest)
