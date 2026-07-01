@@ -75,6 +75,13 @@ def pdf_text(path):
         return ''
 
 
+def num_set(s):
+    """법적 수치 집합(순서 무관 손실탐지용). 2자리+ 정수·소수만 — 1자리 호·연도 노이즈 축소.
+    표 선형화 순서 차이에 둔감(집합이라) → 순서민감 diff 의 오탐을 피하면서 숫자 드롭만 포착."""
+    s = re.sub(r'<[^>]+>', ' ', s)                 # 태그 속성 숫자 제외
+    return set(re.findall(r'\d+\.\d+|\d{2,}', s.replace(',', '')))
+
+
 # 별표 원본 수집(hwpx 우선, 같은 stem 은 하나만)
 byname = {}
 for fn in sorted(os.listdir(SRC)):
@@ -102,7 +109,7 @@ try:
         ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + srcfiles,
         check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
-    ok, fail, no_table, recovered, flagged = 0, [], [], [], []
+    ok, fail, no_table, recovered, flagged, diverged = 0, [], [], [], [], []
     fmt = Counter()
     for stem in sorted(byname):
         srcfn = byname[stem]
@@ -116,19 +123,26 @@ try:
             ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
             capture_output=True, text=True).stdout
         body = clean_md(raw)
-        # 3) 파싱 손실 감지 + PDF 폴백: docx 변환이 표를 누락(md 본문이 PDF 대비 현저히 적음)하면
-        #    원본 PDF 텍스트로 본문 대체(완전성 우선 — 구조<완전성). PDF 없으면 경고만.
+        # 3) 파싱 손실 감지 — 길이 + 숫자집합 이중조건(원본 PDF 대비). 행동은 차등:
+        #    · 길이 대량손실(pl≫ml)  → PDF 텍스트로 본문 대체(완전성 확실, 비가역 판정)
+        #    · 숫자집합 divergence   → 길이 OK 지만 PDF 숫자 다수 누락 = 순서 무관 수치 드롭.
+        #      오탐 위험(pdftotext 분절) 있어 자동교체 대신 검토 플래그(HWP-md 유지).
+        #    · PDF 없음 + 본문 빈약  → 수동 조사 플래그.
         note = ''
         pdfp = os.path.join(SRC, stem + '.pdf')
         if os.path.exists(pdfp):
             ptxt = pdf_text(pdfp)
             ml, pl = text_len(body), text_len(ptxt)
+            only_pdf = num_set(ptxt) - num_set(body)   # PDF 엔 있고 HWP파싱엔 없는 숫자
             if pl > ml * 1.8 and pl - ml > 150:
                 body = ptxt
-                note = 'pdf_fallback'   # docx 변환 누락 → PDF 텍스트로 복구
+                note = 'pdf_fallback'
                 recovered.append((stem, ml, pl))
+            elif len(only_pdf) >= 5:
+                note = 'num_diverge'
+                diverged.append((stem, len(only_pdf), sorted(only_pdf)[:8]))
         elif text_len(body) < 100:
-            note = 'short_no_pdf'        # PDF 없음 + 본문 빈약 → 수동 조사 대상
+            note = 'short_no_pdf'
             flagged.append(stem)
         title, parent, arts = meta_from_name(stem)
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
@@ -148,9 +162,13 @@ try:
     print(f'평균 {total_bytes // max(ok, 1)} bytes/파일 (총 {total_bytes} bytes)')
     if fail:
         print('  ✗ 실패:', *[f'\n     - {s}' for s in fail])
-    print(f'\nPDF 폴백 복구(docx 손실 → PDF 텍스트) {len(recovered)}개:')
+    print(f'\nPDF 폴백 복구(길이 대량손실 → PDF 텍스트) {len(recovered)}개:')
     for s, ml, pl in recovered:
         print(f'     - md {ml}자 → PDF {pl}자 | {s[:60]}')
+    if diverged:
+        print(f'\n⚠ 숫자 divergence(길이 OK·PDF 숫자 누락 → 검토) {len(diverged)}개:')
+        for s, n, sample in diverged:
+            print(f'     - PDF전용숫자 {n}개 {sample} | {s[:55]}')
     if flagged:
         print(f'\n⚠ PDF 없음 + 본문 빈약(수동 조사) {len(flagged)}개:')
         for s in flagged:
