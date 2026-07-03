@@ -94,7 +94,7 @@ def match(exp_list, u):
     for e in exp_list:
         en = norm(e)
         mb = re.search(r'별표(\d+)', en)
-        mj = re.search(r'(제\d+조)', en)
+        mj = re.search(r'(제\d+조(?:의\d+)?)', en)   # 제N조의M 형태(가지조문)까지 포착
         if mb:
             law = en[:mb.start()]
             if law and subseq(law, u['law']) and u['byeol'] == mb.group(1):
@@ -148,8 +148,8 @@ verified = [q for q in qs if q.get('status') != 'provisional']                  
 prov_in_corpus = [q for q in qs if q.get('status') == 'provisional' and q['id'] not in CORPUS_GAP]
 in_corpus = [q for q in qs if q['id'] not in CORPUS_GAP]                             # 갭 제외 전체
 print('\n── 진짜 recall (매처 부분수열 보정 + 코퍼스갭 분리) ──')
-print(f'verified 8문항(Q1~8, 신뢰 gold): {recall(verified)}')
-print(f'provisional 6문항(Q9~13,15, 코퍼스내): {recall(prov_in_corpus)}')
-print(f'전체 코퍼스내 14문항(Q14 갭 제외):    {recall(in_corpus)}')
-print(f'참고 — 전체 15문항(갭 포함, 옛 방식):  {recall(qs)}')
+print(f'verified {len(verified)}문항(신뢰 gold): {recall(verified)}')
+print(f'provisional {len(prov_in_corpus)}문항(코퍼스내): {recall(prov_in_corpus)}')
+print(f'전체 코퍼스내 {len(in_corpus)}문항(Q14 갭 제외): {recall(in_corpus)}')
+print(f'참고 — 전체 {len(qs)}문항(갭 포함): {recall(qs)}')
 print(f'코퍼스갭 Q14(수의사법 미수록): best={next(q["_best"] for q in qs if q["id"]==14)} (None=정상)')
