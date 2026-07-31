@@ -4,7 +4,8 @@
 _rag_eval.py 의 코퍼스·매처 로직을 그대로 재사용하되 임베딩만 Ollama(GPU) 로 교체.
 GPU 백엔드(Ollama)에서 fastembed CPU 대비 수십배 빠름. 생성 LLM 없음(순수 회수 측정).
 
-  OLLAMA_MODEL 환경변수로 모델 교체(기본 bge-m3). 임베딩 캐시(/tmp/rag_emb_ollama_*.npy).
+  OLLAMA_MODEL 환경변수로 모델 교체(기본 qwen3-embedding:8b — 2026-08-01 실측 선정).
+  임베딩 캐시(/tmp/rag_emb_ollama_*.npy) 키는 본문까지 해싱한다(내용 변경 반영).
 """
 import json, glob, os, re, hashlib, time
 import numpy as np
@@ -13,7 +14,7 @@ import requests
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
 CAP = 1800
-MODEL = os.environ.get('OLLAMA_MODEL', 'bge-m3')
+MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')   # 2026-08-01 실측 교체(§임베딩 선택)
 OLLAMA = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
 
 

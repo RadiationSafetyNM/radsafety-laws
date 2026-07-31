@@ -9,7 +9,7 @@
 Dr. Ben 이 직접 매긴다(2026-07-31 결정). 이 스크립트는 채점하기 좋은 형태로 늘어놓기만 한다:
 질문 · 정답 · 모델 답변 · 인용 대조 · 근거 청크를 한 화면에.
 
-검색 단계는 `_rag_eval_ollama.py` 와 같은 임베딩(bge-m3·GPU)·같은 코퍼스를 쓴다 —
+검색 단계는 `_rag_eval_ollama.py` 와 같은 임베딩(qwen3-embedding:8b·GPU·같은 질의 프리픽스)·같은 코퍼스를 쓴다 —
 회수율이 이미 측정된 그 검색기 위에서 생성만 얹는 구조.
 
 사용:
@@ -26,7 +26,9 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
 CAP = 1800
-EMB_MODEL = os.environ.get('OLLAMA_MODEL', 'bge-m3')
+# 2026-08-01 실측으로 bge-m3 → qwen3-embedding:8b 교체. answerable @5 84%→91%, @3 78%→91%.
+# 하네스(_rag_eval_ollama.py)와 **같은 모델·같은 질의 프리픽스**를 써야 측정과 생성이 일치한다.
+EMB_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')
 OLLAMA = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
 GEN_MODEL = os.environ.get('GEN_MODEL', 'sonnet')
 
@@ -72,8 +74,17 @@ def load_units():
     return units
 
 
+# qwen3-embedding 은 질의에 instruct 프리픽스를 권장한다(문서는 그대로). 하네스와 동일 문구 —
+# 다르면 측정과 생성이 서로 다른 검색을 하게 된다. bge-m3 는 프리픽스 불필요.
+INSTRUCT = ('Instruct: Given a Korean radiation-safety legal question, '
+            'retrieve the relevant statute articles and 별표(tables) that answer it\nQuery: '
+            if 'qwen3' in EMB_MODEL else '')
+
+
 def embed(texts, tag):
-    key = hashlib.md5((EMB_MODEL + tag + str(len(texts))).encode()).hexdigest()[:12]
+    # ⚠️ 캐시 키에 본문을 넣는다. 모델·태그·개수만 쓰면 **청크 내용이 바뀌어도 캐시가 적중**해
+    # 낡은 임베딩으로 검색하게 된다(2026-08-01 별표 색인 추가 때 하네스에서 실제로 걸릴 뻔했다).
+    key = hashlib.md5((EMB_MODEL + tag + '|'.join(texts)).encode()).hexdigest()[:12]
     cache = f'/tmp/rag_ans_{key}.npy'
     if os.path.exists(cache):
         return np.load(cache)
@@ -114,7 +125,7 @@ def main():
     qs = yaml.safe_load(open(EVAL, encoding='utf-8'))['questions']
     if a.ids:
         qs = [q for q in qs if q['id'] in a.ids]
-    qemb = embed([q['question'] for q in qs], 'q' + ','.join(str(q['id']) for q in qs))
+    qemb = embed([INSTRUCT + q['question'] for q in qs], 'q' + ','.join(str(q['id']) for q in qs))
 
     lines = ['# RAG 답변 리포트 — 사람 채점용', '',
              f'- 코퍼스: {len(units)} 청크 · 임베딩 `{EMB_MODEL}` · 생성 `claude {GEN_MODEL}`',
