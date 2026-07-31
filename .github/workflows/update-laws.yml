@@ -46,12 +46,43 @@ jobs:
           fi
           cat /tmp/amend.md >> "$GITHUB_STEP_SUMMARY"
 
+      # 파생물 재생성 — 이게 없으면 data/ 는 갱신되는데 청크만 옛 조문에 머문다.
+      # 실제로 7월 내내 청크가 6/30 상태로 방치됐고(재생성이 로컬 수동이었다), 고시 청크는
+      # 미러 형식 변경(07-05)으로 3주 넘게 stale 이었다. 순수 파이썬이라 CI 에서 그대로 돈다.
+      # ⚠️ 별표 파싱본(attachments-parsed)만은 LibreOffice 가 필요해 여기서 못 만든다 —
+      #    새 별표의 *청크* 는 도구 갖춘 로컬에서 파싱 후 커밋해야 들어온다.
+      - name: Rebuild derived data (chunks · forms registry)
+        id: rebuild
+        run: |
+          python3 scripts/_build_forms_registry.py \
+                  data/laws data/admin-rules data/attachments data/attachments-forms-registry.md
+          python3 scripts/_build_chunks.py 2>&1 | tee /tmp/chunks.log
+          {
+            echo ''
+            echo '### 청크 재생성'
+            echo '```'
+            cat /tmp/chunks.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 파싱 실패는 예외가 아니라 '빈 결과'로 나타난다 → 조용히 지나가지 않게 알림에 얹는다.
+          if grep -q '⛔' /tmp/chunks.log; then
+            {
+              echo ''
+              echo '## ⛔ 파싱 경고 — 문서 형식 변경 의심'
+              grep '⛔' /tmp/chunks.log
+              echo ''
+              echo '> 조문 0개로 파싱된 문서가 있습니다. 미러가 본문 형식을 바꿨을 수 있습니다.'
+            } >> /tmp/amend.md
+            echo "regression=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit if changed
         id: commit
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/laws data/admin-rules data/attachments
+          git add data/laws data/admin-rules data/attachments \
+                  data/chunks data/attachments-forms-registry.md
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"
             echo "pushed=false" >> "$GITHUB_OUTPUT"
@@ -70,10 +101,13 @@ jobs:
       # 사람에게 도달하는 지점 — GitHub 알림(메일·앱)이 이슈로 온다.
       # 별도 secret 이 필요 없다(GITHUB_TOKEN). 개정이 실제로 있을 때만 연다.
       - name: Open issue on amendment
-        if: steps.amend.outputs.found == 'true' && steps.commit.outputs.pushed == 'true'
+        if: ${{ (steps.amend.outputs.found == 'true' || steps.rebuild.outputs.regression == 'true') && steps.commit.outputs.pushed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 개정 없이 파싱 경고만으로 열리는 경우가 있어 제목이 비지 않게 폴백을 둔다.
+          SUBJ="${{ steps.amend.outputs.subject }}"
+          if [ -z "$SUBJ" ]; then SUBJ="파싱 경고 — 문서 형식 변경 의심"; fi
           gh issue create \
-            --title "[법령개정] ${{ steps.amend.outputs.subject }} ($(date -u +%Y-%m-%d))" \
+            --title "[법령개정] $SUBJ ($(date -u +%Y-%m-%d))" \
             --body-file /tmp/amend.md

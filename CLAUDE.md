@@ -82,7 +82,9 @@ scripts/
 
 ## 갱신 모델
 
-- **자동**: `update-laws.yml` 이 매주 월요일 03:00 KST(`cron: "0 18 * * 0"`)에 laws→고시→별표 순으로 수집 후 변경 있으면 `github-actions[bot]` 이 커밋·푸시. 변경 없으면 커밋 생략.
+- **자동**: `update-laws.yml` 이 매주 월요일 03:00 KST(`cron: "0 18 * * 0"`)에 laws→고시→별표 순으로 수집 → **개정 감지** → **파생물 재생성(청크·서식 레지스트리)** → 변경 있으면 `github-actions[bot]` 이 커밋·푸시. 변경 없으면 커밋 생략.
+  - ⚠️ **파생물 재생성은 2026-07-31 에야 CI 에 붙었다.** 그전에는 로컬 수동이라 **7월 내내 청크가 6/30 상태로 방치**됐다(개정된 조문이 `data/laws` 에는 반영되고 청크에는 안 들어감). 서식 레지스트리도 같이 stale 이었다. 순수 파이썬이라 CI 에서 그대로 돈다.
+  - ⚠️ **별표 파싱본(`attachments-parsed/`)만은 CI 에서 못 만든다**(LibreOffice 필요) → 새 별표의 *청크* 는 도구 갖춘 로컬에서 파싱·커밋해야 들어온다. 조문 청크는 완전 자동.
 - **수동**: `workflow_dispatch` 버튼 또는 로컬에서:
   ```bash
   bash scripts/update_laws.sh data/laws        # 법령만
