@@ -36,7 +36,9 @@ data/
                  #   (2026-07-01~ 원본 추가. 원본=파싱 충실도, PDF=비전 대조·폴백. 같은 stem·확장자만 다름)
   attachments-parsed/  # [자동·로컬] 별표 원본 → 구조보존 markdown (soffice+H2Orestart→docx→pandoc)
   attachments-forms-registry.md  # [자동·CI] 서식·별지 메타 카탈로그(빈 양식 — 본문 파싱 ✗, 제목·근거조·링크만)
-  chunks/law_chunks.jsonl  # [자동·CI] 조 단위 RAG 청크(content+metadata). 임베딩 전 단계 — pwa 가 소비
+  chunks/law_chunks.jsonl  # [자동·CI] RAG 청크(content+metadata). 임베딩 전 단계 — pwa 가 소비
+                 #   조문(law·admin_rule) + **별표(attachment, 2026-07-31~)**. 별표는 서술형=통짜,
+                 #   데이터 테이블형은 표 행 패킹(헤더 반복)으로 MAXCHARS 이하 분할
 scripts/
   _watchlist.py              # watchlist.toml 로더(tomllib·stdlib) — fetch·audit 양쪽에 공급
   update_laws.sh             # laws 갱신 (legalize-kr raw fetch) — 목록은 _watchlist.py 에서 읽음(하드코딩 제거)
@@ -49,7 +51,9 @@ scripts/
                              #   문자다중집합 divergence(순서·분절 무관, 주 감지)→char_diverge, 숫자집합→num_diverge(가중 오버레이),
                              #   PDF무+빈약→short_no_pdf. diverge 는 검토 플래그(자동교체 안 함). 순서민감 diff·어절집합은 오탐이라 배제.
   _build_forms_registry.py   # 서식·별지 메타 레지스트리 생성(순수 python, 수집기와 동일 게이트 → disk 1:1)
-  _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 — 조 기본·긴 조는 항→호 분할(문자수 분할 금지), 메타 6필드, 조↔별표·서식 링크)
+  _build_chunks.py           # RAG 청크 생성(딥리서치 계층청킹 — 조 기본·긴 조는 항→호 분할(문자수 분할 금지), 메타 6필드, 조↔별표·서식 링크)
+                             #   + 별표 청크(2026-07-31): 기준·수치가 사는 곳이라 링크만으론 검색이 조문에서 멈춘다.
+                             #   ⚠️고시 본문 형식 2종(헤딩/라인시작) 폴백 + 조문 0개 문서 경고(stale 회귀 방지)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
   _amend_selfdiff.py         # 자체 개정 diff — 조문 단위 비교(부칙 분리). API·IP 불필요, git 안에서 완결

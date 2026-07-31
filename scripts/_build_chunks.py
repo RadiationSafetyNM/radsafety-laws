@@ -73,8 +73,18 @@ def article_chunks_law(body):
 
 
 def article_chunks_admin(body):
-    """고시: 제N조(제목) 라인시작 기준 분할."""
-    pat = re.compile(r'^(제\d+조(?:의\d+)?)\(([^)]*)\)', re.M)
+    """고시: 미러 형식이 **두 가지**라 헤딩형을 먼저 시도하고 라인시작형으로 폴백한다.
+
+    ⚠️ 2026-07-05 커밋(`dd06c7f`)에서 admrule-kr 이 고시 본문을 `제N조(제목)` 라인시작에서
+    법령과 같은 `##### 제N조 (제목)` 헤딩으로 바꿨다. 라인시작 패턴만 보던 구 코드는 그 뒤로
+    **조문 0개를 반환**했고, 청크 파일에 남아 있던 고시 375청크는 07-05 이전 산출물이었다
+    (3주 넘게 stale). 파싱 실패가 예외가 아니라 빈 결과로 나타나 조용히 지나간 사례다.
+    → 아래 `empty_docs` 가드가 같은 침묵을 막는다.
+    """
+    out = article_chunks_law(body)                      # ① 신형: ##### 제N조
+    if out:
+        return out
+    pat = re.compile(r'^(제\d+조(?:의\d+)?)\(([^)]*)\)', re.M)   # ② 구형: 제N조(
     return _slice(body, pat)
 
 
@@ -155,6 +165,131 @@ def split_long(text):
     return ho if ho else [('', text)]
 
 
+# ── 별표 청킹 (2026-07-31 신설) ────────────────────────────────────────────
+# 왜: 별표는 "부칙 같은 형식 조항"이 아니라 **기준·수치가 실제로 사는 곳**이다.
+# 지금까지 별표는 조문 청크의 associated_attachments 링크로만 존재해, "선량한도가
+# 얼마인가" 같은 질문에 검색이 조문("별표 2와 같다")에서 멈췄다. 별표 자체를 청크로 만든다.
+#
+# 두 종류가 섞여 있어 단위가 하나로 안 된다(실측 84건):
+#   · 서술형 — 본문 중앙값 1,760자. 통째로 1청크가 맞다.
+#   · 데이터 테이블형 — 최대 232,030자(핵종별 수천 행). 행 단위로 쪼개야 검색이 닿는다.
+# 그래서 MAXCHARS(조문과 동일 기준) 이하면 통짜, 넘으면 표 행 단위로 패킹한다.
+# **패킷마다 표 헤더를 반복**해 넣는다 — 안 그러면 `1E+06` 같은 숫자만 남아 무엇의 값인지 잃는다.
+#
+# HTML 표(pandoc 산출, 84건 중 70건)는 태그가 임베딩 노이즈라 ` | ` 구분 평문으로 편다.
+import html as _html
+
+TABLE_RE = re.compile(r'<table.*?</table>', re.S | re.I)
+TR_RE = re.compile(r'<tr.*?</tr>', re.S | re.I)
+CELL_RE = re.compile(r'<t[dh][^>]*>(.*?)</t[dh]>', re.S | re.I)
+TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _cell(s):
+    return re.sub(r'\s+', ' ', _html.unescape(TAG_RE.sub(' ', s))).strip()
+
+
+def _plain(s):
+    return re.sub(r'\n{3,}', '\n\n', _html.unescape(TAG_RE.sub('', s))).strip()
+
+
+def _rows(tbl):
+    out = []
+    for tr in TR_RE.findall(tbl):
+        cells = [_cell(c) for c in CELL_RE.findall(tr)]
+        if any(cells):
+            out.append(' | '.join(cells))
+    return out
+
+
+def attachment_segments(body):
+    """[(subunit라벨, 조각)] — 표는 행 패킹 + 헤더 반복, 표 밖 텍스트는 그대로."""
+    if len(_plain(body)) <= MAXCHARS and len(body) <= MAXCHARS * 3:
+        return [('', _plain(body))]           # 서술형·짧은 표 → 통짜
+    segs, pos, tidx = [], 0, 0
+    for m in TABLE_RE.finditer(body):
+        pre = _plain(body[pos:m.start()])
+        if pre:
+            segs.append(('', pre))
+        tidx += 1
+        rows = _rows(m.group(0))
+        if rows:
+            header, data = rows[0], rows[1:]
+            if not data:                       # 헤더뿐인 표
+                segs.append((f'표{tidx}', header))
+            cur, start, clen = [], 1, len(header)
+            for i, line in enumerate(data, start=1):
+                if cur and clen + len(line) > MAXCHARS:
+                    segs.append((f'표{tidx} 행{start}~{i - 1}', header + '\n' + '\n'.join(cur)))
+                    cur, start, clen = [], i, len(header)
+                cur.append(line)
+                clen += len(line)
+            if cur:
+                segs.append((f'표{tidx} 행{start}~{len(data)}', header + '\n' + '\n'.join(cur)))
+        pos = m.end()
+    tail = _plain(body[pos:])
+    if tail:
+        segs.append(('', tail))
+    return segs or [('', _plain(body))]
+
+
+ATT_NO_RE = re.compile(r'\\?\[\s*별표\s*(\d+)(?:\s*의\s*(\d+))?\s*\\?\]')
+
+
+def build_attachment(path, parent_meta):
+    """parsed 별표 md 1건 → 청크들. 모법 메타(law_id·소관·위계)를 상속한다."""
+    fm, body = split_front_body(path)
+    base = os.path.basename(path)[:-3]
+    parent = fval(fm, 'parent_law')
+    pm = parent_meta.get(parent)
+    if not pm:
+        # 폴백 — 파싱기가 `parent_law` 를 못 채운 경우가 있다(파일명 괄호 중첩:
+        # "…(교육훈련 포함)의 내용…" 처럼 모법명 안에 괄호가 또 있으면 추출이 어긋난다).
+        # 파일명에 모법 stem 이 그대로 들어가므로 **가장 긴 일치**로 되찾는다.
+        cand = [k for k in parent_meta if k and k in base]
+        if cand:
+            pm = parent_meta[max(cand, key=len)]
+        else:
+            att_orphan.append(base)
+            return []
+    plain = _plain(TABLE_RE.sub(' ', body))
+    if len(plain) < 120 and '삭제' in plain:   # "삭제 <2009.4.29>" 뿐 — 벡터 노이즈
+        att_deleted[0] += 1
+        return []
+
+    title = fval(fm, 'title') or os.path.basename(path)[:-3]
+    m = ATT_NO_RE.search(body[:400])
+    att_no = ('별표' + str(int(m.group(1))) + (f'의{int(m.group(2))}' if m.group(2) else '')
+              if m else '별표')
+    arts = list(dict.fromkeys(re.findall(r'제\d+조(?:의\d+)?', fval(fm, 'delegating_articles'))))
+
+    recs = []
+    for sub, seg in attachment_segments(body):
+        if not seg.strip():
+            continue
+        head = f'「{pm["title"]}」 {att_no} {title}'
+        if sub:
+            head += f' [{sub}]'
+        recs.append({
+            'chunk_id': f'{pm["law_id"]}#{att_no}' + (f'_{sub.replace(" ", "")}' if sub else ''),
+            'content': head + '\n\n' + seg,
+            'metadata': {
+                'law_id': pm['law_id'], 'law_mst': pm['mst'], 'law_title': pm['title'],
+                'jurisdiction': pm['juris'], 'legal_hierarchy': pm['hier'],
+                'document_type': 'attachment',
+                'article': arts[0] if arts else '',      # 위임 조문(대표)
+                'article_title': title, 'subunit': sub,
+                'attachment_no': att_no,
+                'delegating_articles': arts,             # 조↔별표 양방향의 별표 쪽
+                'enforce_date': pm['enforce'], 'promulgate_date': pm['promul'],
+                'status': pm['status'],
+                'associated_attachments': [], 'referenced_forms': [],
+                'source': pm['source'],
+            },
+        })
+    return recs
+
+
 def build(path, doctype):
     fm, body = split_front_body(path)
     stem = os.path.basename(path)[:-3]
@@ -176,9 +311,17 @@ def build(path, doctype):
         enforce, promul = fval(fm, '시행일자'), fval(fm, '발령일자')
         status = fval(fm, '제개정구분')
         chunks = article_chunks_admin(body)
+    if not chunks:
+        # 파싱 실패는 예외가 아니라 '빈 결과'로 나타난다 — 조용히 지나가면 청크가 stale 해진다.
+        empty_docs.append(os.path.basename(path))
     source = fval(fm, '출처')
     juris = JURIS.get(dept, dept)
     hier = HIER.get(gubun, gubun)
+    # 별표 청크가 모법 메타를 상속하도록 stem 기준으로 보관
+    # (parsed 별표의 frontmatter `parent_law` 값 = 모법 md 파일 stem)
+    parent_meta[stem] = {'law_id': law_id, 'mst': mst, 'title': title, 'juris': juris,
+                         'hier': hier, 'enforce': enforce, 'promul': promul,
+                         'status': status, 'source': source}
 
     recs = []
     for art, atitle, text in chunks:
@@ -219,6 +362,10 @@ def build(path, doctype):
 
 # ── 실행 ──
 deleted = [0]
+empty_docs = []
+att_deleted = [0]
+att_orphan = []
+parent_meta = {}
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 allrecs = []
 for folder, dt in ((LAWS, 'law'), (ADMIN, 'admin_rule')):
@@ -227,6 +374,10 @@ for folder, dt in ((LAWS, 'law'), (ADMIN, 'admin_rule')):
     for fn in sorted(os.listdir(folder)):
         if fn.endswith('.md'):
             allrecs.extend(build(os.path.join(folder, fn), dt))
+
+# 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
+for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
+    allrecs.extend(build_attachment(mdp, parent_meta))
 
 with open(OUT, 'w', encoding='utf-8') as f:
     for r in allrecs:
@@ -242,9 +393,17 @@ split = sum(1 for r in allrecs if r['metadata']['subunit'])
 lens = [len(r['content']) for r in allrecs]
 avg = sum(lens) // max(len(allrecs), 1)
 over = sum(1 for x in lens if x > MAXCHARS + 400)   # 분할 후에도 큰 청크(항/호 없는 통짜)
-print(f'청크 {len(allrecs)}개 → {OUT} (삭제 조 {deleted[0]}개 제외)')
+print(f'청크 {len(allrecs)}개 → {OUT} (삭제 조 {deleted[0]}개 · 삭제 별표 {att_deleted[0]}개 제외)')
 print(f'  document_type: {dict(by_dt)}')
 print(f'  jurisdiction:  {dict(by_j)}')
 print(f'  legal_hierarchy: {dict(by_h)}')
 print(f'  별표 연결 청크: {w_att} · 서식 참조 청크: {w_form} · 항/호 분할 청크: {split}')
 print(f'  평균 content 길이: {avg}자 · 최대 {max(lens)}자 · MAXCHARS+400 초과(통짜) {over}개')
+att = [r for r in allrecs if r['metadata']['document_type'] == 'attachment']
+srcs = len({r['metadata']['attachment_no'] + r['metadata']['law_title'] for r in att})
+print(f'  별표 청크: {len(att)}개 (원본 별표 {srcs}건 · 표 분할 '
+      f"{sum(1 for r in att if r['metadata']['subunit'])}개)")
+if empty_docs:
+    print(f'  ⛔ 조문 0개로 파싱된 문서 {len(empty_docs)}건 — 형식 변경 의심: {empty_docs[:5]}')
+if att_orphan:
+    print(f'  ⚠️ 모법 미매칭 별표 {len(att_orphan)}건: {att_orphan[:3]}')
