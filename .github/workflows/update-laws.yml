@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write            # 개정 감지 시 알림 이슈 생성
 
 jobs:
   update:
@@ -27,14 +28,52 @@ jobs:
       - name: Fetch attachments 별표 (law.go.kr flDownload · 공개)
         run: python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
 
+      # 커밋 *전에* 돈다 — 워킹트리(새로 받은 것) ↔ HEAD(지난주) 비교.
+      # 파일 diff 가 아니라 frontmatter 법령MST 변경분만 골라 조문 단위로 푼다.
+      # 실측: 파일은 매주 바뀌어도 실제 개정은 월 1회 안팎(4주 중 1주) — 이 필터가 헛알림을 막는다.
+      - name: Detect amendments (조문 단위)
+        id: amend
+        run: |
+          if python3 scripts/_amend_report.py --format md > /tmp/amend.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "subject<<EOF"
+              python3 scripts/_amend_report.py --subject
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat /tmp/amend.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Commit if changed
+        id: commit
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/laws data/admin-rules data/attachments
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "chore: 법령·고시·별표 갱신 $(date -u +%Y-%m-%d)"
+            if [ "${{ steps.amend.outputs.found }}" = "true" ]; then
+              # 개정이 있으면 제목이 무엇이 바뀌었는지 말하게 한다(로그를 훑을 때 바로 보이도록)
+              git commit -m "chore: ${{ steps.amend.outputs.subject }} ($(date -u +%Y-%m-%d))" \
+                         -m "$(cat /tmp/amend.md)"
+            else
+              git commit -m "chore: 법령·고시·별표 갱신 $(date -u +%Y-%m-%d) (개정 없음·재가공분)"
+            fi
             git push
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # 사람에게 도달하는 지점 — GitHub 알림(메일·앱)이 이슈로 온다.
+      # 별도 secret 이 필요 없다(GITHUB_TOKEN). 개정이 실제로 있을 때만 연다.
+      - name: Open issue on amendment
+        if: steps.amend.outputs.found == 'true' && steps.commit.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "[법령개정] ${{ steps.amend.outputs.subject }} ($(date -u +%Y-%m-%d))" \
+            --body-file /tmp/amend.md
