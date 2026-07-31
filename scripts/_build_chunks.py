@@ -281,6 +281,9 @@ def build_attachment(path, parent_meta):
                 'article_title': title, 'subunit': sub,
                 'attachment_no': att_no,
                 'delegating_articles': arts,             # 조↔별표 양방향의 별표 쪽
+                # 파싱 품질 플래그(math_loss·corrected·char_diverge…). 검색·인용 단계에서
+                # "이 청크는 파싱 손실 의심" 을 알 수 있어야 하므로 청크까지 끌고 온다.
+                'parse_note': fval(fm, 'parse_note'),
                 'enforce_date': pm['enforce'], 'promulgate_date': pm['promul'],
                 'status': pm['status'],
                 'associated_attachments': [], 'referenced_forms': [],
@@ -403,6 +406,26 @@ att = [r for r in allrecs if r['metadata']['document_type'] == 'attachment']
 srcs = len({r['metadata']['attachment_no'] + r['metadata']['law_title'] for r in att})
 print(f'  별표 청크: {len(att)}개 (원본 별표 {srcs}건 · 표 분할 '
       f"{sum(1 for r in att if r['metadata']['subunit'])}개)")
+noted = Counter(r['metadata']['parse_note'] for r in att if r['metadata']['parse_note'])
+if noted:
+    print(f'  파싱 플래그 붙은 별표 청크: {dict(noted)}')
+
+# ── 별표 원본 ↔ 파싱본 짝 검사 ──────────────────────────────────────────────
+# 별표 파싱은 LibreOffice 가 필요해 CI 에서 못 돈다(로컬 수동). 그래서 개정으로 새 별표가
+# 수집됐는데 파싱본이 없으면 그 별표는 *조용히* 청크에서 빠진다 — 없는 줄도 모른다.
+# 여기서 짝을 맞춰 ⛔ 로 알린다(워크플로가 chunks.log 의 ⛔ 를 이슈에 얹는다).
+ATT_SRC = os.path.join(os.path.dirname(PARSED) or '.', 'attachments')
+src_stems = {os.path.splitext(f)[0] for f in os.listdir(ATT_SRC)
+             if f.startswith('[별표]') and f.lower().endswith(('.hwp', '.hwpx'))} \
+    if os.path.isdir(ATT_SRC) else set()
+parsed_stems = {os.path.basename(p)[:-3] for p in glob.glob(os.path.join(PARSED, '*.md'))}
+unparsed = sorted(src_stems - parsed_stems)
+orphaned = sorted(parsed_stems - src_stems)
+if unparsed:
+    print(f'  ⛔ 파싱본 없는 별표 원본 {len(unparsed)}건 — 청크에서 누락됩니다. '
+          f'도구 갖춘 로컬에서 _parse_attachments.py 실행 후 커밋 필요: {unparsed[:3]}')
+if orphaned:
+    print(f'  ⚠️ 원본 없는 파싱본 {len(orphaned)}건 — 별표가 폐지됐을 수 있습니다: {orphaned[:3]}')
 if empty_docs:
     print(f'  ⛔ 조문 0개로 파싱된 문서 {len(empty_docs)}건 — 형식 변경 의심: {empty_docs[:5]}')
 if att_orphan:

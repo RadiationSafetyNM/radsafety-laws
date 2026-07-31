@@ -12,12 +12,13 @@
 전제: LibreOffice(soffice) + H2Orestart 확장 설치(사용자 프로필). pandoc 설치.
 사용: python3 scripts/_parse_attachments.py [attachments폴더] [출력폴더]
 """
-import sys, os, re, subprocess, tempfile, shutil, zipfile
+import sys, os, re, json, subprocess, tempfile, shutil, zipfile
 import xml.etree.ElementTree as ET
 from collections import Counter
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else 'data/attachments'
 DST = sys.argv[2] if len(sys.argv) > 2 else 'data/attachments-parsed'
+CORR = os.path.join(os.path.dirname(SRC) or '.', 'attachments-corrections.json')
 
 ORIG_EXT = ('.hwpx', '.hwp')   # hwpx 우선(개방포맷)
 
@@ -112,6 +113,33 @@ def math_loss(s):
     hits = re.findall(rf'\d[\d.,]*\s*×\s*(?![\d\s{_SUP}])[^\s<]{{0,12}}', s)
     hits += re.findall(rf'\d[\d.,]*\s*×\s*10(?![\d\s\^\-−{_SUP}])[^\s<]{{0,12}}', s)
     return hits
+
+
+def load_corrections():
+    """교정 오버레이(data/attachments-corrections.json) 로드. 없으면 빈 dict."""
+    try:
+        with open(CORR, encoding='utf-8') as f:
+            return json.load(f).get('corrections', {})
+    except FileNotFoundError:
+        return {}
+
+
+def apply_corrections(body, rules):
+    """파서가 구조적으로 복원 못 하는 자리를 근거 있는 수동 교정으로 되돌린다(2026-07-31).
+
+    파싱본을 직접 손대지 않고 재파싱마다 재적용되므로 산출물은 여전히 재현 가능하다.
+    all-or-nothing — rule 의 실제 발생 횟수가 expect 와 다르면 **하나도 적용하지 않고**
+    correction_stale 을 낸다. 상류 원본이 개정돼 문장이 바뀌었는데 낡은 교정이 조용히
+    덧씌워지는 실패(수동 hwpx 가 새 hwp 를 이기는 것과 같은 양식)를 막는 가드다.
+    미적용 시 원문 그대로 남으므로 math_loss 등 감지기가 대신 울린다 — 조용히 넘어가지 않는다.
+    반환 = (본문, 'corrected' | 'correction_stale' | '')"""
+    if not rules:
+        return body, ''
+    if any(body.count(r['find']) != r['expect'] for r in rules):
+        return body, 'correction_stale'
+    for r in rules:
+        body = body.replace(r['find'], r['replace'])
+    return body, 'corrected'
 
 
 # ── OWPML(hwpx) 직접 파싱 — LibreOffice 우회(H2Orestart 가 표를 버리는 문제 근본 해결) ──
@@ -222,7 +250,8 @@ try:
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
     ok, fail, no_table, recovered, flagged, diverged = 0, [], [], [], [], []
-    math_lost = []
+    math_lost, corrected, corr_stale = [], [], []
+    corrections = load_corrections()
     fmt = Counter()
     for stem in sorted(byname):
         srcfn = byname[stem]
@@ -247,6 +276,12 @@ try:
                 ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
                 capture_output=True, text=True).stdout
             body = clean_md(raw)
+        # 2.5) 교정 오버레이 — 감지 *전*에 적용해야 교정된 자리가 재차 플래그되지 않는다.
+        body, cnote = apply_corrections(body, corrections.get(stem, {}).get('rules'))
+        if cnote == 'corrected':
+            corrected.append(stem)
+        elif cnote == 'correction_stale':
+            corr_stale.append(stem)
         # 3) 파싱 손실 감지 — 4층(PDF 대조 3층 + 수식 1층). 행동 차등:
         #    · 길이 대량손실(pl≫ml)      → PDF 텍스트로 본문 대체(pdf_fallback, 완전성 확실·비가역)
         #    · 문자다중집합 divergence   → 주 감지기. 순서·분절 무관, 텍스트+숫자 전부.
@@ -282,6 +317,8 @@ try:
         if mhits:
             note = f'{note}+math_loss' if note else 'math_loss'
             math_lost.append((stem, mhits))
+        if cnote:                                    # 교정 이력은 항상 앞에 남긴다
+            note = f'{cnote}+{note}' if note else cnote
         title, parent, arts = meta_from_name(stem)
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
         fmt[ext] += 1
@@ -314,6 +351,15 @@ try:
         print(f'\n⚠ PDF 없음 + 본문 빈약(수동 조사) {len(flagged)}개:')
         for s in flagged:
             print(f'     - {s}')
+    if corrected:
+        print(f'\n🔧 교정 오버레이 적용 {len(corrected)}개:')
+        for s in corrected:
+            print(f'     - {s[:60]}')
+    if corr_stale:
+        print(f'\n⛔ 교정 stale {len(corr_stale)}개 — 원본이 바뀌어 교정 규칙이 안 맞습니다. '
+              'data/attachments-corrections.json 갱신 필요(미적용 상태로 통과):')
+        for s in corr_stale:
+            print(f'     - {s[:60]}')
     if math_lost:
         n = sum(len(h) for _, h in math_lost)
         print(f'\n⛔ 수식 개체 소실 의심 {len(math_lost)}개 별표 / {n}곳 '

@@ -21,7 +21,17 @@ law.go.kr 이 일부 별표를 **손실 유발 바이너리 `.hwp`로만** 제�
 
 - 방사성핵종별 자체처분 허용농도 · 원자로조종면허 신체검사 합격기준 · 원자로조종면허 신체검사의 방법ㆍ판정기준 · 정도관리항목 · 특수의료장비 설치인정기준 · 품질관리검사기관의 시설 및 검사장비 기준(⚠ PDF 없어 hwpx 가 유일 복구 경로).
 
-> 신규 별표가 같은 증상(파싱 손실 플래그 `pdf_fallback`/`char_diverge`/`short_no_pdf`)을 보이면 동일하게 처리: 한글로 hwpx 변환 → 커밋 → 이 목록에 추가.
+> 신규 별표가 같은 증상(파싱 손실 플래그 `pdf_fallback`/`char_diverge`/`short_no_pdf`/`math_loss`)을 보이면 동일하게 처리: 한글로 hwpx 변환 → 커밋 → 이 목록에 추가.
+
+> ⚠️ **일괄 변환은 하지 않는다** (2026-07-31 실측 판단). hwp 라서 깨지는 게 아니다 — 84개 전량 재파싱 결과 손실 플래그 0, 선량한도(시행령 별표1) 같은 핵심 표도 hwp 원본에서 병합셀까지 온전하다. hwp 는 *깨질 때 전멸*하지만 그 자리는 감지기가 지목한다. **플래그가 뜬 건만** 변환하는 게 이 §의 운영 방식이고, 남은 59개 hwp 를 예방적으로 변환하면 노동만 크고 **낡은 수동 hwpx 가 개정된 새 hwp 를 이기는**(파서가 hwpx 우선) 더 나쁜 실패를 부른다.
+
+### 예외 2 — 교정 오버레이 (2026-07-31)
+
+수식 개체 소실(`math_loss`)처럼 **원본이 hwpx 여도 못 고치거나 hwpx 가 없는** 자리를 위한 좁은 통로. `data/attachments-corrections.json` 에 `find`/`replace`/`expect` 규칙을 두면 파서가 본문 추출 직후·손실감지 직전에 적용한다.
+
+- 파싱본을 직접 손대지 않고 **재파싱마다 재적용**되므로 산출물은 여전히 재현 가능(규칙이 repo 에 있다).
+- **staleness 가드**: 실제 발생 횟수가 `expect` 와 다르면 **하나도 적용 않고** `correction_stale` 을 띄운다. 상류가 개정돼 문장이 바뀌었는데 낡은 교정이 조용히 덧씌워지는 것을 막는다. 미적용이면 원문이 그대로 남아 `math_loss` 가 대신 울린다 — 침묵하는 경로가 없다.
+- 규칙마다 `reason` 에 **검산 근거 필수**. 근거 없는 교정은 자산이 아니라 오염원이다.
 
 ---
 
@@ -35,6 +45,8 @@ data/
   attachments/   # [자동·CI] law.go.kr flDownload — 방사선 별표·서식의 원본(HWP/HWPX)+PDF 병행 수집
                  #   (2026-07-01~ 원본 추가. 원본=파싱 충실도, PDF=비전 대조·폴백. 같은 stem·확장자만 다름)
   attachments-parsed/  # [자동·로컬] 별표 원본 → 구조보존 markdown (soffice+H2Orestart→docx→pandoc)
+                 #   frontmatter `parse_note:` = 파싱 품질 플래그(math_loss·corrected·char_diverge…)
+  attachments-corrections.json   # [수동·근거필수] 교정 오버레이 규칙(§예외 2). 파서가 재파싱마다 적용
   attachments-forms-registry.md  # [자동·CI] 서식·별지 메타 카탈로그(빈 양식 — 본문 파싱 ✗, 제목·근거조·링크만)
   chunks/law_chunks.jsonl  # [자동·CI] RAG 청크(content+metadata). 임베딩 전 단계 — pwa 가 소비
                  #   조문(law·admin_rule) + **별표(attachment, 2026-07-31~)**. 별표는 서술형=통짜,
@@ -85,6 +97,7 @@ scripts/
 - **자동**: `update-laws.yml` 이 매주 월요일 03:00 KST(`cron: "0 18 * * 0"`)에 laws→고시→별표 순으로 수집 → **개정 감지** → **파생물 재생성(청크·서식 레지스트리)** → 변경 있으면 `github-actions[bot]` 이 커밋·푸시. 변경 없으면 커밋 생략.
   - ⚠️ **파생물 재생성은 2026-07-31 에야 CI 에 붙었다.** 그전에는 로컬 수동이라 **7월 내내 청크가 6/30 상태로 방치**됐다(개정된 조문이 `data/laws` 에는 반영되고 청크에는 안 들어감). 서식 레지스트리도 같이 stale 이었다. 순수 파이썬이라 CI 에서 그대로 돈다.
   - ⚠️ **별표 파싱본(`attachments-parsed/`)만은 CI 에서 못 만든다**(LibreOffice 필요) → 새 별표의 *청크* 는 도구 갖춘 로컬에서 파싱·커밋해야 들어온다. 조문 청크는 완전 자동.
+    - 그래서 `_build_chunks.py` 가 **별표 원본 ↔ 파싱본 짝 검사**를 하고 빠진 게 있으면 `⛔` 를 찍는다(2026-07-31). CI 가 그 `⛔` 를 개정 이슈에 얹으므로, 새 별표가 파싱 안 된 채 청크에서 누락되는 상황이 조용히 지나가지 않는다 — 로컬 파싱이 필요하다는 알림이 온다.
 - **수동**: `workflow_dispatch` 버튼 또는 로컬에서:
   ```bash
   bash scripts/update_laws.sh data/laws        # 법령만

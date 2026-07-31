@@ -68,10 +68,14 @@ jobs:
           if grep -q '⛔' /tmp/chunks.log; then
             {
               echo ''
-              echo '## ⛔ 파싱 경고 — 문서 형식 변경 의심'
+              echo '## ⛔ 데이터 경고 — 청크가 원본을 다 담지 못했습니다'
               grep '⛔' /tmp/chunks.log
               echo ''
-              echo '> 조문 0개로 파싱된 문서가 있습니다. 미러가 본문 형식을 바꿨을 수 있습니다.'
+              echo '> 두 종류가 여기로 옵니다.'
+              echo '> · **조문 0개로 파싱된 문서** — 미러가 본문 형식을 바꿨을 수 있습니다.'
+              echo '> · **파싱본 없는 별표 원본** — 별표 파싱은 LibreOffice 가 필요해 CI 에서'
+              echo '>   못 돕니다. 도구 갖춘 로컬에서 `_parse_attachments.py` 실행 후 커밋해야'
+              echo '>   그 별표가 청크에 들어옵니다.'
             } >> /tmp/amend.md
             echo "regression=true" >> "$GITHUB_OUTPUT"
           fi
