@@ -202,6 +202,21 @@ def _rows(tbl):
     return out
 
 
+def _seg_index(header, lines):
+    """표 조각 맨 앞에 붙일 '수록 항목' 색인 — 첫 열(핵종·항목명) 나열.
+
+    값 조회형 별표(핵종별 A1/A2·연간섭취한도 등)는 한 조각에 수십 행이 들어가, 찾는 핵종이
+    조각 안에 *있는데도* 신호가 희석돼 검색에서 밀린다(2026-08-01 Q36 I-131 실측: 답이 든
+    조각이 @5 밖). 첫 열을 조각 머리에 모아두면 그 항목의 tf 가 오르고 제목 옆에 붙어
+    어휘·벡터 양쪽에서 잡히기 쉬워진다. 내용 추가가 아니라 **이미 있는 값의 재배치**다."""
+    keys = []
+    for ln in lines:
+        c = ln.split('|')[0].strip()
+        if c and len(c) <= 20 and c not in keys:
+            keys.append(c)
+    return f'[수록 항목] {", ".join(keys)}' if len(keys) >= 3 else ''
+
+
 def attachment_segments(body):
     """[(subunit라벨, 조각)] — 표는 행 패킹 + 헤더 반복, 표 밖 텍스트는 그대로."""
     if len(_plain(body)) <= MAXCHARS and len(body) <= MAXCHARS * 3:
@@ -217,15 +232,22 @@ def attachment_segments(body):
             header, data = rows[0], rows[1:]
             if not data:                       # 헤더뿐인 표
                 segs.append((f'표{tidx}', header))
+            def _pack(lines, a, b):
+                idx = _seg_index(header, lines)
+                body_ = header + '\n' + '\n'.join(lines)
+                return (f'표{tidx} 행{a}~{b}', (idx + '\n' + body_) if idx else body_)
+
+            # 색인 길이를 패킹 예산에 포함 — 뒤에 붙이면 조각이 MAXCHARS 를 넘고, 임베딩
+            # 단계의 CAP 절단에서 꼬리 행이 잘려 나간다(색인 도입 시 통짜초과 15→32개였다).
             cur, start, clen = [], 1, len(header)
             for i, line in enumerate(data, start=1):
-                if cur and clen + len(line) > MAXCHARS:
-                    segs.append((f'표{tidx} 행{start}~{i - 1}', header + '\n' + '\n'.join(cur)))
+                if cur and clen + len(line) + len(_seg_index(header, cur)) > MAXCHARS:
+                    segs.append(_pack(cur, start, i - 1))
                     cur, start, clen = [], i, len(header)
                 cur.append(line)
                 clen += len(line)
             if cur:
-                segs.append((f'표{tidx} 행{start}~{len(data)}', header + '\n' + '\n'.join(cur)))
+                segs.append(_pack(cur, start, len(data)))
         pos = m.end()
     tail = _plain(body[pos:])
     if tail:

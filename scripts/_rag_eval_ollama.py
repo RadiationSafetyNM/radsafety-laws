@@ -77,7 +77,10 @@ for mdp in (sorted(glob.glob('data/attachments-parsed/*.md')) if ATT_MODE == 'md
 print(f'코퍼스: {len(units)} 유닛 (삭제 별표 제외). 모델={MODEL}', flush=True)
 
 # ── 임베딩(캐시) ──
-ids_hash = hashlib.md5((MODEL + '|'.join(u['id'] for u in units)).encode()).hexdigest()[:12]
+# ⚠️ id 만 해싱하면 **청크 내용이 바뀌어도 캐시가 적중**해 낡은 임베딩으로 측정하게 된다
+# (2026-08-01 별표 색인 추가 때 실제로 걸릴 뻔했다). 본문까지 넣어 내용 변경을 반영한다.
+ids_hash = hashlib.md5(
+    (MODEL + '|'.join(u['id'] + u['text'] for u in units)).encode()).hexdigest()[:12]
 cache = f'/tmp/rag_emb_ollama_{ids_hash}.npy'
 if os.path.exists(cache):
     emb = np.load(cache)
@@ -98,6 +101,21 @@ if 'qwen3' in MODEL:
 else:
     INSTRUCT = ''
 qemb = embed([INSTRUCT + q['question'] for q in qs])
+
+# ── 검색기 2종 — 벡터 단독 / 하이브리드(벡터+BM25 RRF). 한 번에 재서 A/B 를 만든다 ──
+from _bm25 import BM25, rrf                                          # noqa: E402
+print('BM25 색인 중...', flush=True)
+bm = BM25([u['text'] for u in units])
+# 어휘 가중치 스윕 — 동일 가중(1.0)이 해로운 게 실측돼(84%→75%) 비중을 훑어 최적점을 찾는다.
+LEXW = [float(x) for x in os.environ.get('RAG_LEXW', '0.15,0.3,0.5,1.0').split(',')]
+ORDERS = {}
+for i, q in enumerate(qs):
+    vec = list(np.argsort(-(emb @ qemb[i])))
+    lex = list(np.argsort(-np.array(bm.scores(q['question']))))
+    ORDERS[q['id']] = {'vector': vec}
+    for w in LEXW:
+        ORDERS[q['id']][f'hyb{w}'] = rrf(vec[:100], lex[:100], weights=[1.0, w])
+RETRIEVERS = ['vector'] + [f'hyb{w}' for w in LEXW]
 
 
 def match(exp_list, u):
@@ -126,11 +144,10 @@ CORPUS_GAP = {14}   # Q14 수의사법 미수록
 K = [1, 3, 5, 10]
 
 
-def recall(subset):
+def recall(subset, ret='vector'):
     hits = {k: 0 for k in K}
     for q in subset:
-        i = q['_i']
-        order = np.argsort(-(emb @ qemb[i]))
+        order = ORDERS[q['id']][ret]
         best = next((j + 1 for j, idx in enumerate(order)
                      if match(q.get('expected_sources', []), units[idx])), None)
         for k in K:
@@ -141,15 +158,21 @@ def recall(subset):
 
 for i, q in enumerate(qs):
     q['_i'] = i
-    order = np.argsort(-(emb @ qemb[i]))
+    order = ORDERS[q['id']]['vector']
     exp = q.get('expected_sources', [])
     best = next((j + 1 for j, idx in enumerate(order) if match(exp, units[idx])), None)
     q['_best'] = best
+    q['_best_hyb'] = next((j + 1 for j, idx in enumerate(ORDERS[q['id']][RETRIEVERS[1]])
+                           if match(exp, units[idx])), None)
     prov = q.get('status') == 'provisional'
     gap = q['id'] in CORPUS_GAP
     tag = 'GAP' if gap else ('prov' if prov else 'ver ')
     verdict = f'회수@{best}' if best else ('MISS(정상=코퍼스갭)' if gap else 'MISS')
-    print(f"[Q{q['id']:>2} {q.get('type','?'):2} {tag}] {verdict:>16} | {q['question'][:38]}")
+    hyb = q['_best_hyb']
+    delta = ('' if hyb == best else
+             f"  [hybrid {'MISS' if not hyb else '@' + str(hyb)}"
+             + (' ↑' if hyb and (not best or hyb < best) else ' ↓') + ']')
+    print(f"[Q{q['id']:>2} {q.get('type','?'):2} {tag}] {verdict:>16}{delta} | {q['question'][:38]}")
     print(f"      기대: {exp}")
     for idx in order[:10]:
         print(f"      {'✓' if match(exp, units[idx]) else ' '} {units[idx]['disp'][:60]}")
@@ -193,35 +216,39 @@ if keyed:
         print(f'⛔ 코퍼스 어디에도 없는 정답키 {len(missing_keys)}개 — 키가 틀렸거나 '
               f'코퍼스 갭입니다: {missing_keys[:8]}')
 
-    for label, strict in (('strict(한 청크가 전부)', True), ('union(top-k 합쳐서)', False)):
-        hits = {k: 0 for k in K}
-        for q, ks in keyed:
-            order = np.argsort(-(emb @ qemb[q['_i']]))
-            for k in K:
-                idxs = order[:k]
-                ok = (any(has_all(units[j]['text'], ks) for j in idxs) if strict
-                      else has_all(' '.join(units[j]['text'] for j in idxs), ks))
-                hits[k] += 1 if ok else 0
-        n = len(keyed)
-        print(f'  {label:22} ' + ' · '.join(
-            f'@{k}={hits[k]}/{n}({round(100 * hits[k] / n)}%)' for k in K))
+    for ret in RETRIEVERS:
+        for label, strict in (('strict(한 청크가 전부)', True), ('union(top-k 합쳐서)', False)):
+            hits = {k: 0 for k in K}
+            for q, ks in keyed:
+                order = ORDERS[q['id']][ret]
+                for k in K:
+                    idxs = order[:k]
+                    ok = (any(has_all(units[j]['text'], ks) for j in idxs) if strict
+                          else has_all(' '.join(units[j]['text'] for j in idxs), ks))
+                    hits[k] += 1 if ok else 0
+            n = len(keyed)
+            print(f'  [{ret:6}] {label:22} ' + ' · '.join(
+                f'@{k}={hits[k]}/{n}({round(100 * hits[k] / n)}%)' for k in K))
 
     # 진단 — 출처는 맞췄는데 답은 못 가져온 문항(= Q12·Q36 류)
-    gapq = []
-    for q, ks in keyed:
-        order = np.argsort(-(emb @ qemb[q['_i']]))
-        src = q['_best'] is not None and q['_best'] <= 5
-        ans = has_all(' '.join(units[j]['text'] for j in order[:5]), ks)
-        if src and not ans:
-            gapq.append(q['id'])
-    print(f'  ⚠ 출처는 @5 안에 있는데 정답은 없는 문항 {len(gapq)}개: {gapq}')
+    for ret in RETRIEVERS:
+        gapq = []
+        for q, ks in keyed:
+            order = ORDERS[q['id']][ret]
+            best = next((j + 1 for j, idx in enumerate(order)
+                         if match(q.get('expected_sources', []), units[idx])), None)
+            if best and best <= 5 and not has_all(' '.join(units[j]['text'] for j in order[:5]), ks):
+                gapq.append(q['id'])
+        print(f'  [{ret:6}] ⚠ 출처는 @5 안인데 정답은 없는 문항 {len(gapq)}개: {gapq}')
 
 verified = [q for q in qs if q.get('status') != 'provisional']                       # Q1~8
 prov_in_corpus = [q for q in qs if q.get('status') == 'provisional' and q['id'] not in CORPUS_GAP]
 in_corpus = [q for q in qs if q['id'] not in CORPUS_GAP]                             # 갭 제외 전체
 print('\n── 진짜 recall (매처 부분수열 보정 + 코퍼스갭 분리) ──')
-print(f'verified {len(verified)}문항(신뢰 gold): {recall(verified)}')
-print(f'provisional {len(prov_in_corpus)}문항(코퍼스내): {recall(prov_in_corpus)}')
-print(f'전체 코퍼스내 {len(in_corpus)}문항(Q14 갭 제외): {recall(in_corpus)}')
-print(f'참고 — 전체 {len(qs)}문항(갭 포함): {recall(qs)}')
+for ret in RETRIEVERS:
+    print(f'[{ret}]')
+    print(f'  verified {len(verified)}문항(신뢰 gold): {recall(verified, ret)}')
+    print(f'  provisional {len(prov_in_corpus)}문항(코퍼스내): {recall(prov_in_corpus, ret)}')
+    print(f'  전체 코퍼스내 {len(in_corpus)}문항(Q14 갭 제외): {recall(in_corpus, ret)}')
+    print(f'  참고 — 전체 {len(qs)}문항(갭 포함): {recall(qs, ret)}')
 print(f'코퍼스갭 Q14(수의사법 미수록): best={next(q["_best"] for q in qs if q["id"]==14)} (None=정상)')
