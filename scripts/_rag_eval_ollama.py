@@ -154,6 +154,68 @@ for i, q in enumerate(qs):
     for idx in order[:10]:
         print(f"      {'✓' if match(exp, units[idx]) else ' '} {units[idx]['disp'][:60]}")
 
+# ── answerable recall — "정답이 top-k 청크 **본문에** 실재하나" (2026-08-01 신설) ──
+# 위 recall 은 기대출처 *문서* 만 본다. 그 문서의 다른 부분이 잡혀도 hit 이라, 답이 실제로
+# 회수됐는지는 모른다. 2026-08-01 triage 에서 Q12·Q36 이 이 틈으로 빠져 검색 실패가
+# 생성 실패로 오분류됐다. 여기서 갈라 본다.
+#   strict = top-k 안의 **한 청크**가 정답키를 전부 담음 (생성이 한 자료로 답할 수 있음)
+#   union  = top-k **전체**를 합치면 정답키가 다 나옴 (조립하면 답할 수 있음)
+from _answer_keys import propose, has_all, numbers   # noqa: E402
+
+keyed, unkeyed, autoq = [], [], []
+for q in qs:
+    if q['id'] in CORPUS_GAP:
+        continue
+    ks = q.get('answer_keys')
+    if not ks:
+        ks = propose(q.get('ground_truth', ''))
+        if ks:
+            autoq.append(q['id'])
+    (keyed if ks else unkeyed).append((q, [str(k) for k in ks]))
+
+corpus_nums = None
+if keyed:
+    corpus_text = ' '.join(u['text'] for u in units)
+    corpus_nums = numbers(corpus_text)
+    missing_keys = []
+    for q, ks in keyed:
+        for k in ks:
+            if not has_all(corpus_text, [k]):
+                missing_keys.append((q['id'], k))
+
+    print('\n── answerable recall (정답키가 top-k 본문에 실재하나) ──')
+    print(f'대상 {len(keyed)}문항 (키 없어 제외 {len(unkeyed)}문항: '
+          f'{[q["id"] for q, _ in unkeyed]} · 코퍼스갭 {sorted(CORPUS_GAP)} 제외)')
+    if autoq:
+        print(f'⚠ 자동 제안 키로 잰 문항 {len(autoq)}개 {autoq} — 평가셋에 answer_keys 를 '
+              '적어 큐레이션할 것(제안 키의 수치는 신뢰도 낮음)')
+    if missing_keys:
+        print(f'⛔ 코퍼스 어디에도 없는 정답키 {len(missing_keys)}개 — 키가 틀렸거나 '
+              f'코퍼스 갭입니다: {missing_keys[:8]}')
+
+    for label, strict in (('strict(한 청크가 전부)', True), ('union(top-k 합쳐서)', False)):
+        hits = {k: 0 for k in K}
+        for q, ks in keyed:
+            order = np.argsort(-(emb @ qemb[q['_i']]))
+            for k in K:
+                idxs = order[:k]
+                ok = (any(has_all(units[j]['text'], ks) for j in idxs) if strict
+                      else has_all(' '.join(units[j]['text'] for j in idxs), ks))
+                hits[k] += 1 if ok else 0
+        n = len(keyed)
+        print(f'  {label:22} ' + ' · '.join(
+            f'@{k}={hits[k]}/{n}({round(100 * hits[k] / n)}%)' for k in K))
+
+    # 진단 — 출처는 맞췄는데 답은 못 가져온 문항(= Q12·Q36 류)
+    gapq = []
+    for q, ks in keyed:
+        order = np.argsort(-(emb @ qemb[q['_i']]))
+        src = q['_best'] is not None and q['_best'] <= 5
+        ans = has_all(' '.join(units[j]['text'] for j in order[:5]), ks)
+        if src and not ans:
+            gapq.append(q['id'])
+    print(f'  ⚠ 출처는 @5 안에 있는데 정답은 없는 문항 {len(gapq)}개: {gapq}')
+
 verified = [q for q in qs if q.get('status') != 'provisional']                       # Q1~8
 prov_in_corpus = [q for q in qs if q.get('status') == 'provisional' and q['id'] not in CORPUS_GAP]
 in_corpus = [q for q in qs if q['id'] not in CORPUS_GAP]                             # 갭 제외 전체
