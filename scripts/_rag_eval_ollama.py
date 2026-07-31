@@ -45,14 +45,24 @@ def embed(texts, batch=64):
 
 # ── 코퍼스 (원본 하네스와 동일) ──
 units = []
+# 별표 표현 방식 — 2026-07-31 별표가 청크로 승격되며 두 경로가 겹쳤다(_rag_eval.py 와 동일 규약).
+#   RAG_ATT=chunk(기본): 청크의 attachment 사용  /  RAG_ATT=md: 구 방식(청크 attachment 제외 + parsed md 통짜)
+ATT_MODE = os.environ.get('RAG_ATT', 'chunk')
+
 for line in open('data/chunks/law_chunks.jsonl', encoding='utf-8'):
     r = json.loads(line)
     m = r['metadata']
+    byeol = ''
+    if m.get('document_type') == 'attachment':
+        if ATT_MODE != 'chunk':
+            continue
+        bm = re.match(r'별표(\d+)', m.get('attachment_no', ''))
+        byeol = bm.group(1) if bm else '?'
     units.append({'id': r['chunk_id'], 'text': r['content'][:CAP],
-                  'law': norm(m['law_title']), 'art': m['article'], 'byeol': '',
+                  'law': norm(m['law_title']), 'art': m['article'], 'byeol': byeol,
                   'disp': f"{m['law_title']} {m['article']}{m['subunit']}"})
 
-for mdp in sorted(glob.glob('data/attachments-parsed/*.md')):
+for mdp in (sorted(glob.glob('data/attachments-parsed/*.md')) if ATT_MODE == 'md' else []):
     t = open(mdp, encoding='utf-8').read()
     body = re.split(r'^---\s*$', t, maxsplit=2, flags=re.M)[-1].strip()
     if re.search(r'삭제\s*(&lt;|<)', body[:60]) or len(re.sub(r'\s', '', body)) < 40:

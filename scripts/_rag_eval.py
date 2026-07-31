@@ -21,15 +21,29 @@ def norm(s):
 
 
 # ── 코퍼스 ──
+# 별표를 어떤 형태로 넣을지 — 2026-07-31 별표가 청크로 승격되면서 두 경로가 겹쳤다.
+#   RAG_ATT=chunk (기본) : law_chunks.jsonl 의 attachment 청크 사용(표 행 분할·헤더 반복)
+#   RAG_ATT=md           : 구 방식 — 청크의 attachment 는 빼고 parsed md 를 통짜로(1800자 절단)
+# 둘을 동시에 넣으면 같은 내용이 두 형태로 경쟁해 점수가 왜곡된다.
+ATT_MODE = os.environ.get('RAG_ATT', 'chunk')
+
 units = []   # {id, text, law, art, byeol, disp}
 for line in open('data/chunks/law_chunks.jsonl', encoding='utf-8'):
     r = json.loads(line)
     m = r['metadata']
+    byeol = ''
+    if m.get('document_type') == 'attachment':
+        if ATT_MODE != 'chunk':
+            continue
+        # 매처는 별표 '번호'로 정답을 맞춘다 — 청크에도 채워줘야 별표 질문이 채점된다.
+        bm = re.match(r'별표(\d+)', m.get('attachment_no', ''))
+        byeol = bm.group(1) if bm else '?'
     units.append({'id': r['chunk_id'], 'text': r['content'][:CAP],
-                  'law': norm(m['law_title']), 'art': m['article'], 'byeol': '',
-                  'disp': f"{m['law_title']} {m['article']}{m['subunit']}"})
+                  'law': norm(m['law_title']), 'art': m['article'], 'byeol': byeol,
+                  'disp': f"{m['law_title']} {m['article']}{m['subunit']}"
+                          if not byeol else f"[{m.get('attachment_no')}] {m['law_title']} {m['subunit']}"})
 
-for mdp in sorted(glob.glob('data/attachments-parsed/*.md')):
+for mdp in (sorted(glob.glob('data/attachments-parsed/*.md')) if ATT_MODE == 'md' else []):
     t = open(mdp, encoding='utf-8').read()
     body = re.split(r'^---\s*$', t, maxsplit=2, flags=re.M)[-1].strip()
     if re.search(r'삭제\s*(&lt;|<)', body[:60]) or len(re.sub(r'\s', '', body)) < 40:
@@ -41,7 +55,7 @@ for mdp in sorted(glob.glob('data/attachments-parsed/*.md')):
                   'law': norm(parent), 'art': '', 'byeol': num,
                   'disp': f"[별표{num}] {os.path.basename(mdp)[4:46]}"})
 
-print(f'코퍼스: {len(units)} 유닛 (삭제 별표 제외). 모델={MODEL}', flush=True)
+print(f'코퍼스: {len(units)} 유닛 · 별표모드={ATT_MODE} · 모델={MODEL}', flush=True)
 
 # ── 임베딩(캐시) ──
 ids_hash = hashlib.md5((MODEL + '|'.join(u['id'] for u in units)).encode()).hexdigest()[:12]
