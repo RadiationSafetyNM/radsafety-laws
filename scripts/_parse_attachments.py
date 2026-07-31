@@ -92,6 +92,28 @@ def char_bag(s):
     return Counter(s)
 
 
+# 정상 윗첨자 표기(HTML sup·유니코드 위첨자·캐럿) — 지수가 살아있다는 증거
+_SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⌃'
+
+
+def math_loss(s):
+    """수식 개체 소실 탐지 — PDF 대조가 원리적으로 못 잡는 층(2026-07-31 신설).
+
+    HWP 수식(EQEDIT) 개체가 docx 변환에서 통째로 날아가면 `2.58×10⁻⁵ C/kg` 이
+    `2.58×C/kg` 이 된다. **원본 PDF 도 같은 자리를 잃으므로**(pdftotext 결과가 공백)
+    char/num divergence 는 그대로 통과한다 → 지수만 사라진 채 법적 수치가 10^n 배 틀린
+    본문이 무플래그로 RAG 청크가 된다. 선량·농도 기준에선 치명적.
+
+    보수적 탐지(오탐보다 미탐을 감수): 과학적 표기 자리 — 즉 **숫자**가 앞선 `수×…` 만.
+    `수×<숫자아님>`(지수부 통째 소실) 과 `수×10<지수없음>`(지수만 소실) 두 형태.
+    앞이 문자면 배수 표기라 제외 — 등급표의 `(D×10)`·`(D×1,000)` 이 실제 오탐이었다.
+    반환 = 의심 조각 리스트(빈 리스트면 정상)."""
+    s = re.sub(r'<sup>.*?</sup>', '⌃', s, flags=re.S)      # 정상 윗첨자 → 보존 표식
+    hits = re.findall(rf'\d[\d.,]*\s*×\s*(?![\d\s{_SUP}])[^\s<]{{0,12}}', s)
+    hits += re.findall(rf'\d[\d.,]*\s*×\s*10(?![\d\s\^\-−{_SUP}])[^\s<]{{0,12}}', s)
+    return hits
+
+
 # ── OWPML(hwpx) 직접 파싱 — LibreOffice 우회(H2Orestart 가 표를 버리는 문제 근본 해결) ──
 # hwpx = OWPML(개방형 XML) zip. Contents/section*.xml 을 직접 파싱해 문단+표(HTML) 복원.
 def _ln(tag):
@@ -200,6 +222,7 @@ try:
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
     ok, fail, no_table, recovered, flagged, diverged = 0, [], [], [], [], []
+    math_lost = []
     fmt = Counter()
     for stem in sorted(byname):
         srcfn = byname[stem]
@@ -224,12 +247,14 @@ try:
                 ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
                 capture_output=True, text=True).stdout
             body = clean_md(raw)
-        # 3) 파싱 손실 감지 — 3층(원본 PDF 대비). 행동 차등:
+        # 3) 파싱 손실 감지 — 4층(PDF 대조 3층 + 수식 1층). 행동 차등:
         #    · 길이 대량손실(pl≫ml)      → PDF 텍스트로 본문 대체(pdf_fallback, 완전성 확실·비가역)
         #    · 문자다중집합 divergence   → 주 감지기. 순서·분절 무관, 텍스트+숫자 전부.
         #      비율 임계(다중페이지 머리말 반복 노이즈 흡수) → 검토 플래그(char_diverge, HWP-md 유지)
         #    · 숫자집합 divergence       → 가중 오버레이. 숫자 1개 오류는 char 차 미미하나 법적 치명 → num_diverge
         #    · PDF 없음 + 본문 빈약      → short_no_pdf(수동 조사)
+        #    · 수식 개체 소실            → math_loss. PDF 도 같이 잃는 층이라 위 3층과 독립
+        #      (오버레이 — 다른 note 와 공존 가능). 지수 1개가 10^n 배 오차라 법적 치명.
         #    diverge 는 자동교체 안 함(부분손실 시 구조 좋은 HWP-md 유지, vision/수동이 판정).
         note = ''
         pdfp = os.path.join(SRC, stem + '.pdf')
@@ -253,6 +278,10 @@ try:
         elif text_len(body) < 100:
             note = 'short_no_pdf'
             flagged.append(stem)
+        mhits = math_loss(body)                     # PDF 유무와 무관한 독립 층 → 오버레이
+        if mhits:
+            note = f'{note}+math_loss' if note else 'math_loss'
+            math_lost.append((stem, mhits))
         title, parent, arts = meta_from_name(stem)
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
         fmt[ext] += 1
@@ -285,5 +314,13 @@ try:
         print(f'\n⚠ PDF 없음 + 본문 빈약(수동 조사) {len(flagged)}개:')
         for s in flagged:
             print(f'     - {s}')
+    if math_lost:
+        n = sum(len(h) for _, h in math_lost)
+        print(f'\n⛔ 수식 개체 소실 의심 {len(math_lost)}개 별표 / {n}곳 '
+              '(PDF 대조로는 안 잡히는 층 — 원본 확인 필요):')
+        for s, hits in math_lost:
+            print(f'     - {s[:56]}')
+            for h in hits[:4]:
+                print(f'         · {h!r}')
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
