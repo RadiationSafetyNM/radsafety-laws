@@ -52,6 +52,9 @@ scripts/
   _build_chunks.py           # 조 단위 RAG 청크 생성(딥리서치 계층청킹 — 조 기본·긴 조는 항→호 분할(문자수 분할 금지), 메타 6필드, 조↔별표·서식 링크)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
+  _amend_selfdiff.py         # 자체 개정 diff — 조문 단위 비교(부칙 분리). API·IP 불필요, git 안에서 완결
+  _amend_moleg.py            # 법제처 비교 API — 신구법비교(oldAndNew)·3단비교(thdCmp, ⚠️knd 필수). IP 등록 필요
+  _amend_audit.py            # 교차검증 — 자체 diff ↔ 법제처 신구법비교 대조(AGREE/SELF_ONLY/API_ONLY) + 3단비교 파급
 .github/workflows/update-laws.yml  # 주간 cron 자동 갱신 (월 03:00 KST / ubuntu-latest)
 ```
 
@@ -98,6 +101,41 @@ python3 scripts/_freshness_audit.py <OC> data/laws    # OC = benkorea.ai (가입
 - **⚠️ IP 등록 필요**: 데이터 수집과 달리 이건 OpenAPI 직접호출이라 **호출 PC 공인 IP 가 open.law.go.kr 에 등록**돼야 한다(동적 IP면 변경 시 재등록). lawService 본문은 `MST=` 파라미터(`ID=`는 법령ID 기대 — 혼동주의). 함정 상세: 메모리 `reference_moleg_openapi_gotchas`.
 - **1차 실측(2026-06-29)**: 22/22 SYNC — 상류 지연 0건. 단 1회 스냅샷이라 *공포→legalize-kr 반영 며칠* cadence 측정은 시계열 반복 필요. 배경: 메모리 `project_radsafety_laws_freshness_lag`.
 - **OpenAPI 요청 파라미터·회신 필드 레퍼런스** → [`docs/law-go-kr-openapi.md`](docs/law-go-kr-openapi.md). `query`(법령명 전용) vs 전용 파라미터(`ancYd`·`org`·`efYd`…) 구분, 12 회신필드, 현행연혁코드 3값, 일일 개정감지 함의. 라이브 검증(✓)/미검증(○) 표기.
+
+---
+
+## 개정 내용 추출·교차검증 (2026-07-31 신설)
+
+신선도 감사(위)가 **"개정이 났는가"**(MST 대조)에 답한다면, 여기는 **"무엇이·어디가 바뀌었는가"**에 답한다. MST 는 플래그일 뿐 내용을 말해주지 않기 때문이다.
+
+**독립 관측 2개를 맞대어 서로를 검증한다.**
+
+| | 무엇 | 네트워크 |
+|---|---|---|
+| **A 자체 diff** | `_amend_selfdiff.py` — 우리 미러 두 스냅샷의 조문 단위 차이 | 불필요 (git 안에서 완결) |
+| **B 법제처** | `_amend_moleg.py oldandnew` — 발행처가 스스로 든 개정 조문 | OpenAPI (IP 등록) |
+
+```bash
+python3 scripts/_amend_selfdiff.py --git <old> <new> data/laws/<법령>.md   # A 단독(오프라인)
+python3 scripts/_amend_audit.py data/laws/<법령>.md --auto                  # A↔B 대조
+python3 scripts/_amend_audit.py --all --cache-dir out/moleg                 # 전량 감사
+python3 scripts/_amend_audit.py <path> --auto --impact                      # + 3단비교 파급
+```
+
+**판정 3분기** — 각 출처가 서로 다른 방식으로 틀리기 때문에 의미가 있다:
+
+- **AGREE** — 두 출처 일치. 알림에 그대로 실어도 되는 개정.
+- **SELF_ONLY** — 우리만 잡음. 대개 **미러 재가공**(포맷·오타)이거나 **부칙**(법제처는 부칙을 조문으로 세지 않는 구조적 비대칭). 알림 강도를 낮춘다.
+- **API_ONLY** — ⚠️ 법제처만 잡음. **우리 데이터가 뒤처졌거나 파싱이 놓친 것** — 신선도 사고의 조기 신호.
+
+**왜 `git diff` 로는 안 되는가**: 파일 diff 는 "글자가 달라졌다"만 알려줘 미러 재가공과 진짜 개정을 구별하지 못한다. 실측(2026-07-19 원자력안전법 시행규칙) — **830줄 diff 중 실제 개정 조문은 1개**(제121조 건강진단)였고, 그 다음 주 07-26 커밋은 116줄이 바뀌었지만 MST 무변경 = 법은 그대로였다. 조문 단위로 쪼개야 이 구분이 선다.
+
+**부칙 분리**: 부칙은 마지막 조 뒤에 붙어 있어 그냥 파싱하면 직전 조(제147조 등)의 변경으로 **오귀속**된다. `_amend_selfdiff.py` 가 부칙을 조문에서 떼어 별도 플래그로 낸다 — 이래야 부칙을 조문으로 세지 않는 법제처와 대조가 맞는다.
+
+**3단비교(`thdCmp`) = 파급 분석**이지 개정 이력이 아니다. 법률↔시행령↔시행규칙 조문 대응표라, 개정 조를 찾은 뒤 "이게 바뀌면 어디가 영향받나"에 쓴다(예: 진단용방사선규칙 제13조 → 의료법 제37조). ⚠️ `knd` 필수(1 인용조문 / 2 위임조문) — 빠뜨리면 **HTTP 200 에 빈 본문**이 와서 권한 문제와 구별되지 않는다.
+
+**1차 전량 실측(2026-07-31)**: 8건 감사 — **AGREE 17 · SELF_ONLY 0 · API_ONLY 0**. 상류 지연·파싱 누락 0.
+> 그 과정에서 파서 버그 1건 수리: 회신 CDATA 안에 `<P>` 등 HTML 태그가 **문자열로** 들어와 `<P>제48조의2(…)` 가 조 시작으로 안 잡혀 **가지조문이 앞 조에 흡수**됐다(의료기기법 시행규칙에서 SELF_ONLY 3건 오탐). `strip_tags()` 로 해소 — 수정 전 AGREE 12/SELF_ONLY 5 → 수정 후 17/0.
 
 ---
 
