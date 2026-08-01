@@ -25,7 +25,11 @@ import yaml
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
-CAP = 1800
+# 생성에 넘기는 청크 본문 상한. **1800 은 별표 표 청크를 행 중간에서 잘랐다**(2026-08-02):
+# Q35 에서 `Tc-99m | 1 × 10 1 | 4 ` 까지만 넘어가 모델이 "A2 는 4까지만 표기되고 잘려 있다"고
+# 정직하게 답했다 — 답이 틀린 게 아니라 우리가 답을 잘라 보낸 것이다. 141개 별표 청크가
+# 1800자를 넘고 최대 8,243자다. 생성 모델의 컨텍스트는 1M 이므로 자를 이유가 없다.
+CAP = 20000
 # 2026-08-01 실측으로 bge-m3 → qwen3-embedding:8b 교체. answerable @5 84%→91%, @3 78%→91%.
 # 하네스(_rag_eval_ollama.py)와 **같은 모델·같은 질의 프리픽스**를 써야 측정과 생성이 일치한다.
 EMB_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')
@@ -88,14 +92,16 @@ def embed(texts, tag):
     cache = f'/tmp/rag_ans_{key}.npy'
     if os.path.exists(cache):
         return np.load(cache)
-    out = []
-    for i, t in enumerate(texts):
-        r = requests.post(f'{OLLAMA}/api/embeddings',
-                          json={'model': EMB_MODEL, 'prompt': t}, timeout=120)
+    # 배치 호출(/api/embed). 구 /api/embeddings 는 한 건씩이라 8B 모델·3천 청크에서 느리다 —
+    # 두 엔드포인트의 벡터는 동일함을 확인했다(정규화 후 코사인 1.0, 최대차 7e-9).
+    out, batch = [], 64
+    for i in range(0, len(texts), batch):
+        r = requests.post(f'{OLLAMA}/api/embed',
+                          json={'model': EMB_MODEL, 'input': texts[i:i + batch]}, timeout=600)
         r.raise_for_status()
-        out.append(r.json()['embedding'])
-        if (i + 1) % 200 == 0:
-            print(f'  임베딩 {i + 1}/{len(texts)}', flush=True)
+        out.extend(r.json()['embeddings'])
+        print(f'  임베딩 {min(i + batch, len(texts))}/{len(texts)}', end='\r', flush=True)
+    print()
     a = np.array(out, dtype=np.float32)
     a /= (np.linalg.norm(a, axis=1, keepdims=True) + 1e-9)
     np.save(cache, a)
