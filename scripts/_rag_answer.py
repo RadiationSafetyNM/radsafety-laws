@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""RAG 답변 생성 — 검색(검증됨) → Claude Sonnet 생성 → **사람 채점용** 리포트.
+"""RAG 답변 생성 — 검색(검증됨) → 생성 → **사람 채점용** 리포트.
 
-왜 Sonnet 인가: 운영 lawbot 의 생성 모델이 Claude Sonnet 으로 이미 결정돼 있다
-(2026-06-27 결정 1.5 — Claude 주력 + Gemini Flash 폴백). 로컬 모델로 재면 실전과
-다른 것을 재게 된다. 평가는 '로컬·개발' 활동이라 Claude Code 구독으로 돌린다(추가과금 0).
+생성 백엔드는 갈아끼운다(`GEN_BACKEND=claude|gemini`). 로컬 모델은 쓰지 않는다 — 실전
+서빙이 쓰지 않을 모델로 재면 실전과 다른 것을 재게 된다.
+
+  claude  `claude -p` 구독 CLI. 추가과금 0 이지만 **Vercel 에서는 못 쓴다**(CLI 미실행).
+  gemini  REST API. 실결제이며 AI Studio 프로젝트 `radsafety` 의 월 상한을 서빙 키와 공유.
+
+2026-06-27 결정 1.5 는 "Claude 주력 + Gemini 폴백"이었으나, 그 근거였던 "Gemini 는 소액
+하드캡 부적합"이 사실과 다름이 확인됐다(AI Studio 는 **프로젝트 단위 월 지출 상한**을 지원 —
+2026-08-03 Dr. Ben 실사용). 가격은 Gemini 가 약 4배 유리하므로 주력 전환을 검토 중이고,
+이 어댑터는 그 **품질 비교**와 **서빙 구현** 양쪽에 쓰인다.
 
 **채점하지 않는다.** 수치 일치는 기계로 잡히지만 법적 해석의 타당성은 도메인 판단이라
 Dr. Ben 이 직접 매긴다(2026-07-31 결정). 이 스크립트는 채점하기 좋은 형태로 늘어놓기만 한다:
@@ -36,7 +43,29 @@ CAP = 20000
 # 하네스(_rag_eval_ollama.py)와 **같은 모델·같은 질의 프리픽스**를 써야 측정과 생성이 일치한다.
 EMB_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')
 OLLAMA = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
-GEN_MODEL = os.environ.get('GEN_MODEL', 'sonnet')
+# ── 생성 백엔드 — claude(구독 CLI) / gemini(종량 API) ─────────────────────────
+# 평가는 지금까지 `claude -p`(Claude Code 구독)로 돌려 추가 과금이 0이었다. 서빙은 그 경로를
+# 못 쓴다 — Vercel 함수에서 CLI 는 돌지 않으므로 API 키 기반이어야 한다. 그래서 이 어댑터는
+# 백엔드 비교(2026-08-03 Gemini 선회 검토)와 서빙 구현 **양쪽에 필요**하다.
+GEN_BACKEND = os.environ.get('GEN_BACKEND', 'claude')
+_DEFAULT_MODEL = {'claude': 'sonnet', 'gemini': 'gemini-3.6-flash'}
+GEN_MODEL = os.environ.get('GEN_MODEL', _DEFAULT_MODEL.get(GEN_BACKEND, 'sonnet'))
+
+
+def load_dotenv(path=os.path.join(ROOT, '.env')):
+    """의존성 없이 .env 를 읽는다(값은 셸 환경이 우선). 파일이 없으면 조용히 지나간다."""
+    try:
+        for ln in open(path, encoding='utf-8'):
+            ln = ln.strip()
+            if not ln or ln.startswith('#') or '=' not in ln:
+                continue
+            k, v = ln.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"\''))
+    except FileNotFoundError:
+        pass
+
+
+load_dotenv()
 
 SYS = """당신은 대한민국 방사선안전 법령 상담 어시스턴트입니다.
 
@@ -170,6 +199,51 @@ def ask_claude(prompt):
     return p.stdout.strip()
 
 
+GEMINI_EP = 'https://generativelanguage.googleapis.com/v1beta'
+
+
+def gemini_models(key):
+    """사용 가능한 생성 모델 id 목록 — 모델명이 틀렸을 때 진단에 쓴다."""
+    try:
+        r = requests.get(f'{GEMINI_EP}/models?key={key}', timeout=60)
+        return [m['name'].split('/', 1)[-1] for m in r.json().get('models', [])
+                if 'generateContent' in m.get('supportedGenerationMethods', [])]
+    except Exception as e:
+        return [f'(목록 조회 실패: {e})']
+
+
+def ask_gemini(prompt):
+    """Gemini REST(:generateContent). 키는 .env 의 GEMINI_API_KEY.
+
+    ⚠️ **여기서부터는 실결제다.** claude 백엔드는 구독이라 0원이지만 이쪽은 호출마다 과금되고,
+    AI Studio 프로젝트 `radsafety` 의 월 상한(₩10,000)을 **서빙 키와 공유**한다. 평가를 반복하면
+    서빙 예산을 갉아먹으므로 필요한 만큼만 돌린다."""
+    key = os.environ.get('GEMINI_API_KEY', '')
+    if not key:
+        return ('⚠️ 생성 실패: GEMINI_API_KEY 없음. `.env.example` 을 `.env` 로 복사해 '
+                '`radsafety-lawbot-eval` 키 값을 넣으십시오.')
+    try:
+        r = requests.post(
+            f'{GEMINI_EP}/models/{GEN_MODEL}:generateContent?key={key}',
+            json={'contents': [{'parts': [{'text': prompt}]}]}, timeout=300)
+        if r.status_code == 404:
+            return (f'⚠️ 생성 실패: 모델 `{GEN_MODEL}` 을(를) 찾을 수 없습니다. '
+                    f'사용 가능: {", ".join(gemini_models(key)[:12])}')
+        r.raise_for_status()
+        d = r.json()
+        cand = (d.get('candidates') or [{}])[0]
+        parts = cand.get('content', {}).get('parts') or []
+        txt = ''.join(p.get('text', '') for p in parts).strip()
+        # 빈 응답은 대개 안전필터·토큰상한이다. 조용히 넘기지 말고 이유를 리포트에 남긴다.
+        return txt or f'⚠️ 생성 실패: 빈 응답 (finishReason={cand.get("finishReason")})'
+    except Exception as e:
+        return f'⚠️ 생성 실패: {type(e).__name__} {str(e)[:200]}'
+
+
+def generate(prompt):
+    return ask_gemini(prompt) if GEN_BACKEND == 'gemini' else ask_claude(prompt)
+
+
 def main():
     ap = argparse.ArgumentParser(description='RAG 답변 생성(사람 채점용 리포트)')
     ap.add_argument('--topk', type=int, default=5)
@@ -178,7 +252,7 @@ def main():
     a = ap.parse_args()
 
     units = load_units()
-    print(f'코퍼스 {len(units)} 유닛 · 임베딩 {EMB_MODEL} · 생성 {GEN_MODEL}', flush=True)
+    print(f'코퍼스 {len(units)} 유닛 · 임베딩 {EMB_MODEL} · 생성 {GEN_BACKEND}:{GEN_MODEL}', flush=True)
     emb = embed([u['text'] for u in units], 'corpus')
 
     qs = yaml.safe_load(open(EVAL, encoding='utf-8'))['questions']
@@ -187,7 +261,7 @@ def main():
     qemb = embed([INSTRUCT + q['question'] for q in qs], 'q' + ','.join(str(q['id']) for q in qs))
 
     lines = ['# RAG 답변 리포트 — 사람 채점용', '',
-             f'- 코퍼스: {len(units)} 청크 · 임베딩 `{EMB_MODEL}` · 생성 `claude {GEN_MODEL}`',
+             f'- 코퍼스: {len(units)} 청크 · 임베딩 `{EMB_MODEL}` · 생성 `{GEN_BACKEND} {GEN_MODEL}`',
              f'- 검색 top-{a.topk} 를 근거로 제공. **채점은 Dr. Ben 이 직접** (accuracy 3 · citation 1 · no_hallucination 1)',
              '- 기준선: `baseline_self` = 2026-06-14 수기 측정(별표 파싱·청킹 **이전**) 합 31/40', '']
 
@@ -197,7 +271,7 @@ def main():
                                  for n, j in enumerate(order))
         prompt = f'{SYS}\n\n[근거 자료]\n{ctx}\n\n[질문]\n{q["question"]}'
         print(f'  Q{q["id"]} 생성 중…', flush=True)
-        ans = ask_claude(prompt)
+        ans = generate(prompt)
 
         base = q.get('baseline_self') or {}
         lines += [

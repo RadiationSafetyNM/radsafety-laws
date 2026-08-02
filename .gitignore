@@ -3,3 +3,8 @@ __pycache__/
 
 # RAG 평가 산출물 (사람 채점용 리포트) — 파생물이라 이력에 남기지 않는다
 out/
+
+# API 키. 값은 절대 커밋하지 않는다 — 위치·회전 절차만 vault credentials-map 에 기록한다.
+.env
+.env.*
+!.env.example
