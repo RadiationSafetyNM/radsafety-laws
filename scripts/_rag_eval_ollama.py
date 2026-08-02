@@ -141,6 +141,8 @@ def match(exp_list, u):
 
 # 코퍼스 갭(정답 법령이 코퍼스에 없음) — MISS 가 올바른 동작(정직성 테스트). recall 분모에서 제외.
 CORPUS_GAP = {14}   # Q14 수의사법 미수록
+# 평가셋 자체가 결함이라 지표에서 빼는 문항(모델 탓이 아니다).
+METRIC_EXCLUDE = {15}   # Q15 기대출처가 "2026 범부처 공동개정" — 문서가 아니다
 
 K = [1, 3, 5, 10]
 
@@ -188,14 +190,15 @@ from _answer_keys import propose, has_all, numbers   # noqa: E402
 
 keyed, unkeyed, autoq = [], [], []
 for q in qs:
-    if q['id'] in CORPUS_GAP:
+    if q['id'] in CORPUS_GAP or q['id'] in METRIC_EXCLUDE:
         continue
     ks = q.get('answer_keys')
     if not ks:
         ks = propose(q.get('ground_truth', ''))
         if ks:
             autoq.append(q['id'])
-    (keyed if ks else unkeyed).append((q, [str(k) for k in ks]))
+    # ⚠️ str() 로 감싸지 말 것 — 대체목록 키(리스트)가 통째로 문자열이 돼 매칭이 전멸한다.
+    (keyed if ks else unkeyed).append((q, list(ks)))
 
 corpus_nums = None
 if keyed:

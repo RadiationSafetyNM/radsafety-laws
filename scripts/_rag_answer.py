@@ -291,9 +291,11 @@ def main():
             f'**기대 출처** `{", ".join(q.get("expected_sources", []) or ["—"])}`'
             + (f' · 2026-06 기준선 {base.get("total")}/5' if base else ''), '',
             '**모델 답변**', '', ans, '',
+            # 회수 청크 id — 렌더링엔 안 보이지만 `_answer_audit.py` 가 이걸로 원문을 되찾는다.
+            '<!-- chunks: %s -->' % ','.join(units[j]['id'] for j in order),
             '<details><summary>검색된 근거 top-%d</summary>' % a.topk, '',
         ]
-        keys = [str(k) for k in (q.get('answer_keys') or [])]
+        keys = list(q.get('answer_keys') or [])   # 리스트 키(대체표현) 보존 — str() 금지
         for n, j in enumerate(order):
             lines.append(f'**{n + 1}. `{units[j]["disp"]}`**')
             lines += ['', '```'] + excerpt(units[j]['text'], keys, q['question']) + ['```', '']

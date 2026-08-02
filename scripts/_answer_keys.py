@@ -14,6 +14,15 @@ recall 은 "top-k 청크 **본문에** 정답 값이 실재하나"를 본다.
 
 정답키는 평가셋의 `answer_keys:` 가 권위. 없으면 `propose()` 가 ground_truth 에서
 숫자를 뽑아 제안하지만, **제안은 제안일 뿐** — 큐레이션 안 된 키로 잰 수치는 신뢰하지 말 것.
+
+⚠️ **적용 범위 — 검색 평가 전용. 생성 답변 채점에 쓰지 말 것**(2026-08-03 확정).
+정답키는 *법령 원문*(청크)에 그 값이 회수됐는지 보는 도구다. 원문은 표현이 고정돼 있어
+문자 매칭이 성립한다. 같은 키를 **모델 답변**에 적용하면 두 방향으로 망가진다:
+  · 모델이 제 말로 바꿔 쓰면 뜻이 같아도 불일치 — "감시장치" vs "감시하는 장치"
+  · 키가 질문보다 넓으면, 물은 것만 답한 간결한 답이 감점된다
+실제로 이 지표는 정확도가 아니라 **장황함**을 쟀다(Claude 346자 87% vs Gemini 215자 75% —
+전수 확인 결과 미포함 8건이 **전부 오탐**). 생성 채점은 사람이 하거나, 누락이 아니라
+**모순**을 보는 별도 도구(`_answer_audit.py`)를 쓴다.
 """
 import re
 
@@ -56,14 +65,24 @@ def propose(ground_truth):
     return sorted(numbers(gt))
 
 
+def _has_one(text, k, nums, tx):
+    k = str(k)
+    if re.fullmatch(r'\d+(?:\.\d+)?(?:e-?\d+)?', canon(k).strip()):
+        return canon(k).strip() in nums
+    return normtext(k) in tx
+
+
 def has_all(text, keys):
-    """청크 본문이 정답키를 전부 담고 있나 — 숫자키는 숫자집합, 문자키는 정규화 포함."""
+    """본문이 정답키를 전부 담고 있나 — 숫자키는 숫자집합, 문자키는 정규화 포함.
+
+    **키 하나가 리스트면 그중 하나만 맞으면 된다**(대체 표현, 2026-08-03 신설).
+    법령 원문과 모델 답변은 같은 뜻을 다른 말로 쓴다 — 키 `감시장치` 가 본문
+    "감시**하는** 장치" 와 문자열이 안 맞아 정답을 오답으로 세는 일이 실제로 있었다.
+        ["차폐", ["감시장치", "감시하는 장치", "감시"]]
+    """
     nums, tx = numbers(text), normtext(text)
     for k in keys:
-        k = str(k)
-        if re.fullmatch(r'\d+(?:\.\d+)?(?:e-?\d+)?', canon(k).strip()):
-            if canon(k).strip() not in nums:
-                return False
-        elif normtext(k) not in tx:
+        alts = k if isinstance(k, (list, tuple)) else [k]
+        if not any(_has_one(text, a, nums, tx) for a in alts):
             return False
     return True
