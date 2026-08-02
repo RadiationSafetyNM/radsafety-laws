@@ -22,6 +22,8 @@ import numpy as np
 import requests
 import yaml
 
+from _answer_keys import has_all, normtext   # 채점용 발췌의 정답키·표기 정규화 매칭
+
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
@@ -123,6 +125,42 @@ def embed(texts, tag):
     return a
 
 
+def excerpt(text, keys, question, max_lines=6, width=190):
+    """회수된 청크에서 **채점자가 볼 대목만** 잘라낸다(2026-08-02 신설).
+
+    채점이 피로한 이유는 「근거」에 조항 *이름* 만 있어서, 검증하려면 별표를 열고 해당 행을
+    찾아 올라가야 하기 때문이다. 정답키·질문의 고유 토큰(핵종·조문번호)이 걸리는 줄을 뽑고,
+    표라면 헤더 행을 함께 붙여 **찾지 않고 읽기만 하면 되도록** 만든다.
+    채점 보조용이므로 정답 위치가 드러나는 건 의도된 것이다(모델 입력이 아니다)."""
+    lines = [ln for ln in text.split('\n') if ln.strip()]
+    if not lines:
+        return []
+    header = next((ln for ln in lines if ln.count('|') >= 2), None)   # 표 헤더 행
+    ents = [normtext(e) for e in
+            re.findall(r'[A-Za-z]+-\d+[A-Za-z]*|제\d+조(?:의\d+)?|별표\s*\d+', question)]
+
+    def score(ln):
+        """질문의 고유 항목(핵종·조문)이 걸린 줄을 최우선. 숫자키만 걸린 줄은 다른 핵종
+        행일 수 있어(같은 값이 여러 행에 나온다) 우선순위를 낮춘다."""
+        s = 2 * sum(1 for e in ents if e and e in normtext(ln))
+        if keys:
+            s += 2 if all(has_all(ln, [k]) for k in keys) else (1 if any(has_all(ln, [k]) for k in keys) else 0)
+        return s
+
+    cand = [ln for ln in lines
+            if ln is not header and not ln.lstrip().startswith('[수록 항목]')]
+    ranked = sorted(((score(ln), i) for i, ln in enumerate(cand)), key=lambda t: (-t[0], t[1]))
+    top = ranked[0][0] if ranked else 0
+    if top >= 2:            # 질문의 항목이 실제로 있는 줄 — 그 줄들만 보인다
+        keep = sorted(i for s, i in ranked if s >= 2)[:max_lines]
+    else:                   # 없으면 이 청크는 헛짚은 것 — 맛보기 2줄만(자리 차지 방지)
+        keep = sorted(i for s, i in ranked[:2] if s > 0)
+    picked = [cand[i] for i in keep] or cand[:2]     # 아무것도 안 걸리면 앞부분이라도
+    if header:
+        picked = [header] + picked
+    return [(ln[:width] + '…') if len(ln) > width else ln for ln in picked]
+
+
 def ask_claude(prompt):
     """claude -p 헤드리스. 실패는 리포트에 그대로 남긴다(조용히 넘기지 않는다)."""
     p = subprocess.run(['claude', '-p', '--model', GEN_MODEL, prompt],
@@ -172,8 +210,11 @@ def main():
             '**모델 답변**', '', ans, '',
             '<details><summary>검색된 근거 top-%d</summary>' % a.topk, '',
         ]
-        lines += [f'{n + 1}. `{units[j]["disp"]}`' for n, j in enumerate(order)]
-        lines += ['', '</details>', '',
+        keys = [str(k) for k in (q.get('answer_keys') or [])]
+        for n, j in enumerate(order):
+            lines.append(f'**{n + 1}. `{units[j]["disp"]}`**')
+            lines += ['', '```'] + excerpt(units[j]['text'], keys, q['question']) + ['```', '']
+        lines += ['</details>', '',
                   '| accuracy(3) | citation(1) | no_hallucination(1) | 계 |',
                   '|---|---|---|---|', '|  |  |  |  |', '', '---', '']
 
