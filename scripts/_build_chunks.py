@@ -57,7 +57,11 @@ def norm_article(s):
 
 # ── 별표 링크맵: parsed 별표 md frontmatter(parent_law·delegating_articles) → (parent, 제N조) → [md] ──
 att_map = defaultdict(list)
-for mdp in glob.glob(os.path.join(PARSED, '*.md')):
+# ⚠️ sorted() 필수 — glob 은 파일시스템 순서를 그대로 준다. kimbi(ext4)와 CI(ubuntu)에서
+# 순서가 달라져 `associated_attachments` 목록의 **정렬만** 바뀐 diff 가 매 CI 마다 생겼다
+# (2026-08-03 첫 실전 CI 에서 11개 청크가 그렇게 바뀌었다 — 내용은 동일). 산출물이
+# 결정적이어야 "이번에 진짜 뭐가 바뀌었나"를 diff 로 판별할 수 있다.
+for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
     fm, _ = split_front_body(mdp)
     parent = fval(fm, 'parent_law')
     arts = fval(fm, 'delegating_articles')      # "[제2조제4호]" 형태
