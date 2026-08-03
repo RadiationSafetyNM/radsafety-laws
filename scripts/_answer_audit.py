@@ -24,13 +24,33 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 # 값처럼 보이는 숫자만 — 단위가 붙었거나 과학적 표기인 것. 조·항·호·서식 번호는 값이 아니다.
 UNIT = (r'mSv|밀리시버트|Sv|rem|Bq|TBq|GBq|MBq|mCi|Ci|C/kg|R|mR|mA|kV|'
         r'년|개월|일|시간|분|명|배|퍼센트|%|m|㎡|㎥|cm|mm')
-VAL = re.compile(rf'(\d+(?:\.\d+)?(?:\s*×\s*10\s*\^?\s*[-−]?\d+)?)\s*(?:{UNIT})\b')
-SCI = re.compile(r'\d+(?:\.\d+)?\s*(?:×\s*10\s*\^?\s*[-−]?\d+|[Ee][+-]?\d+)')
-STRIP = re.compile(r'제\s*\d+\s*(?:조|항|호|목|란|장|절)(?:의\d+)?|별표\s*\d+|별지\s*제?\d+호?|<개정[^>]*>')
+# canon() 을 먼저 적용하므로 지수는 모두 `2.58e-6` 형태다. **지수부를 통째로 삼켜야** 한다 —
+# 안 그러면 `2.58e-6C/kg` 에서 끝의 "6" 만, `3e0 TBq` 에서 "0" 만 잘려 나와 헛플래그가 된다.
+# (?<![\w.]) 로 토큰 중간 매칭도 막는다.
+NUM = r'(?<![\w.])\d+(?:\.\d+)?(?:e-?\d+)?'
+VAL = re.compile(rf'({NUM})\s*(?:{UNIT})\b')
+SCI = re.compile(NUM + r'(?<=\d)e-?\d+' if False else r'(?<![\w.])\d+(?:\.\d+)?e-?\d+')
+# 값이 아닌 숫자는 먼저 지운다 — 조·항·호 번호, 서식 번호, 그리고 **날짜**
+# ("2026년 7월 9일 개정" 의 9 가 근거 없는 수치로 잡혔다).
+STRIP = re.compile(
+    r'제\s*\d+\s*(?:조|항|호|목|란|장|절)(?:의\d+)?|별표\s*\d+|별지\s*제?\d+호?|<개정[^>]*>|'
+    r'\d{4}\s*[.년]\s*\d{1,2}\s*[.월]\s*\d{1,2}\s*일?|\d{4}\s*년|제\s*\d+\s*호')
 
 
-def values(text):
-    t = STRIP.sub(' ', text)
+ANYNUM = re.compile(r'(?<![\w.])\d+(?:\.\d+)?(?:e-?\d+)?')
+
+
+def values(text, strict=True):
+    """strict=True(답변측): 단위가 붙었거나 과학적 표기인 '값'만 — 목록번호·연도 노이즈 배제.
+    strict=False(원문측): **모든 숫자**를 담는다.
+
+    ⚠️ 비대칭이 의도다. 표 원문은 단위를 헤더에만 두고 셀은 `1.2 | 33 | 0.07` 처럼 맨숫자라,
+    양쪽에 같은 추출기를 쓰면 원문에 있는 값도 '근거 없음'으로 잡힌다(2026-08-03 실제로
+    Q3·Q27·Q28 에서 두 모델이 동시에 오탐됐다 — 둘이 같은 값을 지어냈을 리 없다).
+    원문측을 넉넉히 잡아 **오탐보다 미탐 쪽으로** 기울인다."""
+    t = STRIP.sub(' ', canon(text))
+    if not strict:
+        return {m for m in ANYNUM.findall(t)}
     out = {canon(m).strip() for m in SCI.findall(t)}
     out |= {canon(m.group(1)).strip() for m in VAL.finditer(t)}
     return {v for v in out if v}
@@ -57,7 +77,7 @@ def audit(path, chunks):
         src = ' '.join(chunks.get(c, '') for c in cids if c)
         if not src:
             continue
-        unsupported = sorted(values(ans) - values(src))
+        unsupported = sorted(values(ans, strict=True) - values(src, strict=False))
         if unsupported:
             rows.append((qid, unsupported))
         bad = []
