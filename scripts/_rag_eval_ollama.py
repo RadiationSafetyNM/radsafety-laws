@@ -40,6 +40,12 @@ def embed(texts, batch=64):
         print(f'  임베딩 {min(i + batch, len(texts))}/{len(texts)}', end='\r', flush=True)
     print()
     e = np.array(out, dtype=np.float32)
+    # Matryoshka 절단(EMB_DIM) — qwen3-embedding 은 MRL 로 학습돼 앞쪽 차원만 잘라 써도
+    # 품질이 크게 안 떨어진다. pgvector 인덱스가 vector 2,000 / halfvec 4,000 차원에서
+    # 막히는데 우리 벡터는 4,096 이라, 인덱스를 쓰려면 절단이 필요하다. 자른 뒤 재정규화.
+    d = int(os.environ.get('EMB_DIM', '0'))
+    if d and d < e.shape[1]:
+        e = e[:, :d]
     e /= (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9)
     return e
 
@@ -81,7 +87,7 @@ print(f'코퍼스: {len(units)} 유닛 (삭제 별표 제외). 모델={MODEL}', 
 # ⚠️ id 만 해싱하면 **청크 내용이 바뀌어도 캐시가 적중**해 낡은 임베딩으로 측정하게 된다
 # (2026-08-01 별표 색인 추가 때 실제로 걸릴 뻔했다). 본문까지 넣어 내용 변경을 반영한다.
 ids_hash = hashlib.md5(
-    (MODEL + '|'.join(u['id'] + u['text'] for u in units)).encode()).hexdigest()[:12]
+    (MODEL + os.environ.get('EMB_DIM', '0') + '|'.join(u['id'] + u['text'] for u in units)).encode()).hexdigest()[:12]
 cache = f'/tmp/rag_emb_ollama_{ids_hash}.npy'
 if os.path.exists(cache):
     emb = np.load(cache)
