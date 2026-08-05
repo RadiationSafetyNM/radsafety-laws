@@ -92,11 +92,33 @@ def article_chunks_admin(body):
     return _slice(body, pat)
 
 
+# 부칙 경계 — `## 부칙` 헤딩 또는 `부칙 <제12345호,…>` 줄. 실측(2026-08-04): 43개 문서 중
+# 17개가 이 마커를 갖고, **전부 마지막 조 헤딩보다 뒤**에 있다(형식 일관).
+SUPPL = re.compile(r'(?m)^(?:#{1,6}\s*부\s*칙\s*$|부\s*칙\s*<)')
+
+
 def _slice(body, pat):
-    out = []
+    """조 헤딩 기준 분할. 마지막 조는 **부칙 앞에서 끊는다.**
+
+    ⚠️ 2026-08-04 수리 — 종전에는 마지막 조의 끝을 `len(body)` 로 잡아 **부칙 전체를
+    마지막 조가 삼켰다.** 그 텍스트를 `split_long` 이 항(②③…) 단위로 쪼개는데 부칙마다
+    ②③④ 가 다시 나오니 같은 `{law_id}#{art}_{sub}` 가 최대 27번 만들어졌다.
+    결과는 두 가지 손상이었다:
+      ① `chunk_id` 충돌 569행 — Supabase 는 chunk_id 가 primary key 라 조용히 덮어쓴다.
+      ② 라벨 오염 — 「약사법」 제98조(과태료) ② 인데 본문이 *담배사업법 개정문* 인 청크가
+         검색 코퍼스에 섞였다(2026-08-01 이후 recall 측정에도 이 노이즈가 들어 있었다).
+    부칙은 시행일·경과조치라 조문 검색의 대상이 아니므로 청크에서 제외한다.
+    """
     ms = list(pat.finditer(body))
+    if not ms:
+        return []
+    cut = len(body)
+    sm = SUPPL.search(body, ms[-1].end())      # 마지막 조 **뒤**의 부칙만 경계로 인정
+    if sm:
+        cut = sm.start()
+    out = []
     for i, m in enumerate(ms):
-        end = ms[i + 1].start() if i + 1 < len(ms) else len(body)
+        end = ms[i + 1].start() if i + 1 < len(ms) else cut
         art = m.group(1)
         title = (m.group(2) or '').strip()
         text = body[m.end():end].strip()
@@ -259,7 +281,10 @@ def attachment_segments(body):
     return segs or [('', _plain(body))]
 
 
-ATT_NO_RE = re.compile(r'\\?\[\s*별표\s*(\d+)(?:\s*의\s*(\d+))?\s*\\?\]')
+# ⚠️ 닫는 괄호가 **전각 ］(U+FF3D)** 인 별표가 있다(HWP 원문 그대로). 반각만 받으면 번호
+# 추출이 실패해 att_no 가 '별표' 로 뭉치고, 한 법령의 서로 다른 별표 3건이 같은 chunk_id 로
+# 충돌한다(2026-08-04 실측: 특수의료장비 품질관리검사기관 규정 별표2·3·4). 양쪽 다 받는다.
+ATT_NO_RE = re.compile(r'\\?[\[［]\s*별표\s*(\d+)(?:\s*의\s*(\d+))?\s*\\?[\]］]')
 
 
 def build_attachment(path, parent_meta):
@@ -290,14 +315,22 @@ def build_attachment(path, parent_meta):
     arts = list(dict.fromkeys(re.findall(r'제\d+조(?:의\d+)?', fval(fm, 'delegating_articles'))))
 
     recs = []
+    # 라벨 없는 조각(표 사이·표 뒤의 평문)은 sub 가 '' 라 한 별표에서 여러 개 나오면 전부
+    # 같은 chunk_id 가 된다(2026-08-04 실측: 의료분야 기술기준 별표1 에서 6개). 두 번째부터
+    # `_p2`·`_p3` 를 붙여 가른다 — 첫 조각은 접미 없이 두어 기존 ID 를 보존한다.
+    plain_seq = 0
     for sub, seg in attachment_segments(body):
         if not seg.strip():
             continue
         head = f'「{pm["title"]}」 {att_no} {title}'
         if sub:
             head += f' [{sub}]'
+        else:
+            plain_seq += 1
+        suffix = (f'_{sub.replace(" ", "")}' if sub
+                  else ('' if plain_seq <= 1 else f'_p{plain_seq}'))
         recs.append({
-            'chunk_id': f'{pm["law_id"]}#{att_no}' + (f'_{sub.replace(" ", "")}' if sub else ''),
+            'chunk_id': f'{pm["law_id"]}#{att_no}' + suffix,
             'content': head + '\n\n' + seg,
             'metadata': {
                 'law_id': pm['law_id'], 'law_mst': pm['mst'], 'law_title': pm['title'],
@@ -407,6 +440,20 @@ for folder, dt in ((LAWS, 'law'), (ADMIN, 'admin_rule')):
 # 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
 for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
     allrecs.extend(build_attachment(mdp, parent_meta))
+
+# ── chunk_id 고유성 가드 (2026-08-04 신설) ────────────────────────────────
+# chunk_id 는 Supabase `lawbot_chunks` 의 primary key 다. 중복이 섞이면 인입 배치의
+# upsert 가 서로를 **조용히 덮어쓴다** — 에러 없이 행이 사라지고, 검색만 나빠진다.
+# 부칙 삼킴 버그(§_slice)로 실제 569행이 이 경로로 사라질 뻔했다. 여기서 막는다.
+# 산출물을 쓰지 않고 실패시키는 이유: 깨진 청크 파일이 남으면 다음 단계가 그걸 그대로 먹는다.
+_dup = {cid: n for cid, n in Counter(r['chunk_id'] for r in allrecs).items() if n > 1}
+if _dup:
+    _by_law = Counter(r['metadata']['law_title'] for r in allrecs if r['chunk_id'] in _dup)
+    print(f'⛔ chunk_id 중복 {len(_dup)}개 (사본 {sum(_dup.values()) - len(_dup)}행) — '
+          f'{OUT} 를 쓰지 않고 중단합니다.')
+    print(f'   영향 문서: {dict(_by_law.most_common(8))}')
+    print(f'   예: {list(_dup.items())[:5]}')
+    sys.exit(1)
 
 with open(OUT, 'w', encoding='utf-8') as f:
     for r in allrecs:
