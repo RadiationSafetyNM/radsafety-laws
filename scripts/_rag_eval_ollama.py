@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""로컬 GPU RAG 검색 품질 검증 — Ollama 임베딩(bge-m3 등) 회수(recall) 테스트.
+"""RAG 검색 품질 검증 — 임베딩 백엔드별 회수(recall) 테스트.
+
+EMB_BACKEND=ollama(기본, 로컬 GPU) | gemini(외부 API). 코퍼스·매처·지표는 동일하고
+임베딩만 바뀐다 — 같은 평가셋으로 두 백엔드를 견주기 위한 것(2026-09-21 재비교).
+Gemini 는 프리픽스 대신 taskType(RETRIEVAL_DOCUMENT/QUERY)으로 문서·질의를 가른다.
 
 _rag_eval.py 의 코퍼스·매처 로직을 그대로 재사용하되 임베딩만 Ollama(GPU) 로 교체.
 GPU 백엔드(Ollama)에서 fastembed CPU 대비 수십배 빠름. 생성 LLM 없음(순수 회수 측정).
@@ -14,8 +18,22 @@ import requests
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
 CAP = 1800
-MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')   # 2026-08-01 실측 교체(§임베딩 선택)
+BACKEND = os.environ.get('EMB_BACKEND', 'ollama')              # ollama(로컬 GPU) | gemini(외부 API)
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3-embedding:8b')   # 2026-08-01 실측 교체(§임베딩 선택)
+GEMINI_MODEL = os.environ.get('GEMINI_EMB_MODEL', 'gemini-embedding-2')
+MODEL = OLLAMA_MODEL if BACKEND == 'ollama' else GEMINI_MODEL
 OLLAMA = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
+
+
+def _gemini_key():
+    k = os.environ.get('GEMINI_API_KEY')
+    if k:
+        return k
+    for line in open(os.path.join(os.path.dirname(__file__), '..', '.env'), encoding='utf-8'):
+        if line.startswith('GEMINI_API_KEY='):
+            return line.split('=', 1)[1].strip().strip('"').strip("'")
+    raise RuntimeError('GEMINI_API_KEY 없음')
 
 
 def norm(s):
@@ -29,14 +47,45 @@ def subseq(a, b):
     return all(c in it for c in a)
 
 
-def embed(texts, batch=64):
-    """Ollama /api/embed 배치 호출 → L2 정규화된 float32 행렬."""
+def _embed_ollama(chunk, task):
+    r = requests.post(f'{OLLAMA}/api/embed', json={'model': MODEL, 'input': chunk}, timeout=300)
+    r.raise_for_status()
+    return r.json()['embeddings']
+
+
+def _embed_gemini(chunk, task):
+    """batchEmbedContents. 문서·질의를 taskType 으로 가른다(qwen3 의 INSTRUCT 프리픽스 대응).
+
+    outputDimensionality 로 MRL 절단을 서버에서 받는다 — 3072 외 차원은 재정규화가 필요한데
+    아래에서 어차피 L2 정규화하므로 그대로 쓴다."""
+    dim = int(os.environ.get('EMB_DIM', '0'))
+    tt = 'RETRIEVAL_QUERY' if task == 'query' else 'RETRIEVAL_DOCUMENT'
+    body = {'requests': [{
+        'model': f'models/{MODEL}',
+        'content': {'parts': [{'text': t}]},
+        'taskType': tt,
+        **({'outputDimensionality': dim} if dim else {}),
+    } for t in chunk]}
+    url = f'{GEMINI_BASE}/models/{MODEL}:batchEmbedContents?key={_gemini_key()}'
+    for attempt in range(5):
+        r = requests.post(url, json=body, timeout=300)
+        if r.status_code == 200:
+            return [e['values'] for e in r.json()['embeddings']]
+        if r.status_code in (429, 500, 503):        # 쿼터·일시 장애는 물러섰다 다시
+            time.sleep(2 ** attempt)
+            continue
+        raise RuntimeError(f'gemini {r.status_code}: {r.text[:300]}')
+    raise RuntimeError('gemini 재시도 초과')
+
+
+def embed(texts, batch=None, task='document'):
+    """백엔드별 배치 호출 → L2 정규화된 float32 행렬."""
+    if batch is None:
+        batch = 64 if BACKEND == 'ollama' else 16
+    post = _embed_ollama if BACKEND == 'ollama' else _embed_gemini
     out = []
     for i in range(0, len(texts), batch):
-        chunk = texts[i:i + batch]
-        r = requests.post(f'{OLLAMA}/api/embed', json={'model': MODEL, 'input': chunk}, timeout=300)
-        r.raise_for_status()
-        out.extend(r.json()['embeddings'])
+        out.extend(post(texts[i:i + batch], task))
         print(f'  임베딩 {min(i + batch, len(texts))}/{len(texts)}', end='\r', flush=True)
     print()
     e = np.array(out, dtype=np.float32)
@@ -81,14 +130,15 @@ for mdp in (sorted(glob.glob('data/attachments-parsed/*.md')) if ATT_MODE == 'md
                   'law': norm(parent), 'art': '', 'byeol': num,
                   'disp': f"[별표{num}] {os.path.basename(mdp)[4:46]}"})
 
-print(f'코퍼스: {len(units)} 유닛 (삭제 별표 제외). 모델={MODEL}', flush=True)
+print(f'코퍼스: {len(units)} 유닛 (삭제 별표 제외). 백엔드={BACKEND} 모델={MODEL}', flush=True)
 
 # ── 임베딩(캐시) ──
 # ⚠️ id 만 해싱하면 **청크 내용이 바뀌어도 캐시가 적중**해 낡은 임베딩으로 측정하게 된다
 # (2026-08-01 별표 색인 추가 때 실제로 걸릴 뻔했다). 본문까지 넣어 내용 변경을 반영한다.
 ids_hash = hashlib.md5(
-    (MODEL + os.environ.get('EMB_DIM', '0') + '|'.join(u['id'] + u['text'] for u in units)).encode()).hexdigest()[:12]
-cache = f'/tmp/rag_emb_ollama_{ids_hash}.npy'
+    (BACKEND + MODEL + os.environ.get('EMB_DIM', '0')
+     + '|'.join(u['id'] + u['text'] for u in units)).encode()).hexdigest()[:12]
+cache = f'/tmp/rag_emb_{BACKEND}_{ids_hash}.npy'
 if os.path.exists(cache):
     emb = np.load(cache)
     print('임베딩 캐시 로드.', flush=True)
@@ -102,12 +152,12 @@ else:
 import yaml
 qs = yaml.safe_load(open(EVAL, encoding='utf-8'))['questions']
 # qwen3-embedding 은 쿼리에 instruct 프리픽스 권장(문서는 그대로). bge-m3 는 프리픽스 불필요.
-if 'qwen3' in MODEL:
+if BACKEND == 'ollama' and 'qwen3' in MODEL:
     INSTRUCT = ('Instruct: Given a Korean radiation-safety legal question, '
                 'retrieve the relevant statute articles and 별표(tables) that answer it\nQuery: ')
 else:
-    INSTRUCT = ''
-qemb = embed([INSTRUCT + q['question'] for q in qs])
+    INSTRUCT = ''                      # gemini 는 taskType=RETRIEVAL_QUERY 가 같은 일을 한다
+qemb = embed([INSTRUCT + q['question'] for q in qs], task='query')
 
 # ── 검색기 2종 — 벡터 단독 / 하이브리드(벡터+BM25 RRF). 한 번에 재서 A/B 를 만든다 ──
 from _bm25 import BM25, rrf                                          # noqa: E402
