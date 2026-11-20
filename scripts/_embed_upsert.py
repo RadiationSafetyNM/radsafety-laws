@@ -18,7 +18,7 @@
     python3 scripts/_embed_upsert.py --force
 
 필요 환경변수(`.env`):
-    AI_GATEWAY_API_KEY          Vercel AI Gateway (업스트림 DeepInfra) — 임베딩
+    GEMINI_API_KEY              Gemini API — 임베딩(gemini-embedding-001, §결정 1.8)
     SUPABASE_URL                dev 프로젝트 URL  ⚠️ §결정3 — 라이브 DB 에서 개발 금지
     SUPABASE_SERVICE_ROLE_KEY   쓰기는 service role 만(RLS 상 anon/authenticated 는 읽기 전용)
 
@@ -31,7 +31,10 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed, EMB_CAP, EMB_DIM, BACKEND   # noqa: E402
 
-CHUNKS = 'data/chunks/law_chunks.jsonl'
+# 전 판본(현행 + 시행예정)을 넣는다 — 결정 4(2026-11-20). 행의 키 = (chunk_id, effective_from).
+# law_chunks.jsonl(기준일 현행본만)은 평가 도구용이라 인입 원천이 아니다.
+CHUNKS = 'data/chunks/law_chunk_versions.jsonl'
+KEY = lambda r: (r['chunk_id'], r['effective_from'])
 UPSERT_BATCH = 200      # PostgREST 한 요청당 행 수. 1024차원 float 200행 ≈ 1.6MB.
 
 
@@ -49,6 +52,7 @@ def load_chunks():
             m = {**m, 'byeol': bm.group(1) if bm else '?'}
         rows.append({
             'chunk_id': r['chunk_id'],
+            'effective_from': r['effective_from'], 'effective_to': r.get('effective_to'),
             'content': r['content'],          # 저장은 전문(생성 모델이 읽는 본문)
             '_embed_text': text,              # 임베딩은 CAP 절단본 — 하네스와 동일 조건
             'metadata': {**m, 'content_sha': hashlib.sha256(text.encode()).hexdigest()[:16]},
@@ -57,10 +61,12 @@ def load_chunks():
 
 
 def fetch_existing(url, key):
-    """기존 행의 content_sha 를 전부 읽어온다 → 변경분만 재임베딩(개정 주기마다 CI 로 도는 것 전제)."""
+    """기존 행의 (content_sha, effective_to) 를 전부 읽어온다 → 변경분만 재임베딩.
+    키는 (chunk_id, effective_from). 본문은 같고 종료일만 생긴 행은 임베딩 없이 날짜만 고친다."""
     seen, offset, page = {}, 0, 1000
     while True:
-        r = requests.get(f'{url}/rest/v1/lawbot_chunks', params={'select': 'chunk_id,metadata'},
+        r = requests.get(f'{url}/rest/v1/lawbot_chunks', params={'select': 'chunk_id,effective_from,effective_to,metadata',
+                                 'order': 'chunk_id,effective_from'},
                          headers={'apikey': key, 'Authorization': f'Bearer {key}',
                                   'Range-Unit': 'items', 'Range': f'{offset}-{offset + page - 1}'},
                          timeout=120)
@@ -70,20 +76,34 @@ def fetch_existing(url, key):
         r.raise_for_status()
         batch = r.json()
         for row in batch:
-            seen[row['chunk_id']] = (row.get('metadata') or {}).get('content_sha')
+            seen[(row['chunk_id'], row['effective_from'])] = (
+                (row.get('metadata') or {}).get('content_sha'), row.get('effective_to'))
         if len(batch) < page:
             return seen
         offset += page
 
 
 def upsert(url, key, payload):
-    r = requests.post(f'{url}/rest/v1/lawbot_chunks', params={'on_conflict': 'chunk_id'},
+    r = requests.post(f'{url}/rest/v1/lawbot_chunks', params={'on_conflict': 'chunk_id,effective_from'},
                       headers={'apikey': key, 'Authorization': f'Bearer {key}',
                                'Content-Type': 'application/json',
                                'Prefer': 'resolution=merge-duplicates,return=minimal'},
                       json=payload, timeout=300)
     if not r.ok:
         raise RuntimeError(f'upsert {r.status_code}: {r.text[:400]}')
+
+
+def close_row(url, key, r):
+    """본문은 그대로인데 종료일만 바뀐 행 — 임베딩을 다시 만들지 않고 effective_to 만 고친다.
+    (다음 판본이 새로 공포돼 기존 현행 조문에 끝 날짜가 생기는 경우가 이 길로 온다.)"""
+    resp = requests.patch(f'{url}/rest/v1/lawbot_chunks',
+                          params={'chunk_id': f'eq.{r["chunk_id"]}',
+                                  'effective_from': f'eq.{r["effective_from"]}'},
+                          headers={'apikey': key, 'Authorization': f'Bearer {key}',
+                                   'Content-Type': 'application/json', 'Prefer': 'return=minimal'},
+                          json={'effective_to': r['effective_to']}, timeout=60)
+    if not resp.ok:
+        raise RuntimeError(f'close {resp.status_code}: {resp.text[:300]}')
 
 
 def main():
@@ -101,35 +121,45 @@ def main():
     for r in rows:
         kinds[r['metadata'].get('document_type', '?')] = kinds.get(r['metadata'].get('document_type', '?'), 0) + 1
     capped = sum(1 for r in rows if len(r['content']) > EMB_CAP)
-    dup = len(rows) - len({r['chunk_id'] for r in rows})
+    dup = len(rows) - len({KEY(r) for r in rows})
     print(f'코퍼스 {len(rows)} 청크 · 종류 {kinds}')
-    print(f'  임베딩 절단(CAP {EMB_CAP}) 적용 {capped}건 · chunk_id 중복 {dup}건 · 목표차원 {EMB_DIM}')
+    print(f'  임베딩 절단(CAP {EMB_CAP}) 적용 {capped}건 · (chunk_id, effective_from) 중복 {dup}건 · 목표차원 {EMB_DIM}')
     if dup:
-        sys.exit('⛔ chunk_id 가 중복입니다 — primary key 라 upsert 가 서로를 덮어씁니다. 청킹부터 고칠 것.')
+        sys.exit('⛔ (chunk_id, effective_from) 가 중복입니다 — primary key 라 upsert 가 서로를 덮어씁니다. 청킹부터 고칠 것.')
 
     if a.dry_run:
         s = rows[0]
-        print(f'\n[샘플] {s["chunk_id"]}\n  meta={json.dumps(s["metadata"], ensure_ascii=False)[:300]}')
+        up = sum(1 for r in rows if r['effective_to'])
+        print(f'  종료일이 있는 행 {up}건 · 서로 다른 시행일 {len({r["effective_from"] for r in rows})}개')
+        print(f'\n[샘플] {s["chunk_id"]} @{s["effective_from"]}\n  meta={json.dumps(s["metadata"], ensure_ascii=False)[:300]}')
         print(f'  content[:120]={s["content"][:120]!r}')
         print('\ndry-run — 임베딩·업서트는 하지 않았습니다. 실제 인입에는 '
-              'AI_GATEWAY_API_KEY · SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY 가 필요합니다.')
+              'GEMINI_API_KEY · SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY 가 필요합니다(.env).')
         return
 
     url = (os.environ.get('SUPABASE_URL') or '').rstrip('/')
     key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
     if not url or not key:
         sys.exit('⛔ SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY 가 필요합니다 (§결정3: dev 프로젝트를 쓸 것).')
-    if BACKEND != 'gateway':
-        sys.exit(f'⛔ EMB_BACKEND={BACKEND} — 인입은 gateway 여야 합니다. ollama 는 양자화가 달라 '
-                 '질의(gateway)와 좌표계가 어긋납니다(평가 하네스 전용).')
+    if BACKEND != 'gemini':
+        sys.exit(f'⛔ EMB_BACKEND={BACKEND} — 인입은 gemini 여야 합니다(§결정 1.8). '
+                 '다른 백엔드는 모델이 달라 질의와 좌표계가 어긋납니다.')
 
     existing = fetch_existing(url, key)
     if existing is None:
         return
-    todo = rows if a.force else [r for r in rows
-                                 if existing.get(r['chunk_id']) != r['metadata']['content_sha']]
+    sha_of = lambda r: (existing.get(KEY(r)) or (None, None))[0]
+    todo = rows if a.force else [r for r in rows if sha_of(r) != r['metadata']['content_sha']]
+    todo_keys = {KEY(r) for r in todo}
+    closing = [r for r in rows if KEY(r) in existing and KEY(r) not in todo_keys
+               and existing[KEY(r)][1] != r['effective_to']]
+    stale = set(existing) - {KEY(r) for r in rows}
     print(f'기존 {len(existing)}행 · 인입 대상 {len(todo)}행'
-          f'{" (--force)" if a.force else " (변경분만)"}')
+          f'{" (--force)" if a.force else " (변경분만)"} · 종료일만 갱신 {len(closing)}행')
+    if stale and not a.limit:
+        print(f'  ⚠ DB 에만 있는 행 {len(stale)}건 — 지우지 않았습니다(판본이 철회됐을 수 있음). 예: {sorted(stale)[:3]}')
+    for r in closing:
+        close_row(url, key, r)
     if not todo:
         print('변경 없음 — 할 일이 없습니다.')
         return
@@ -139,7 +169,8 @@ def main():
     for i in range(0, len(todo), UPSERT_BATCH):
         part = todo[i:i + UPSERT_BATCH]
         payload = [{
-            'chunk_id': r['chunk_id'], 'content': r['content'], 'metadata': r['metadata'],
+            'chunk_id': r['chunk_id'], 'effective_from': r['effective_from'],
+            'effective_to': r['effective_to'], 'content': r['content'], 'metadata': r['metadata'],
             # pgvector 는 PostgREST 를 통과할 때 '[0.1,0.2,...]' 문자열 리터럴로 받아야 한다.
             # JSON 배열로 보내면 타입 캐스팅에서 막힌다.
             'embedding': '[' + ','.join(f'{x:.7f}' for x in vecs[i + j]) + ']',

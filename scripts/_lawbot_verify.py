@@ -10,14 +10,14 @@
 같은 평가셋·같은 매처(`_match.py`)로 재므로 숫자가 직접 비교된다.
 
 사용:
-    SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... AI_GATEWAY_API_KEY=... \
+    SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... GEMINI_API_KEY=... \
         python3 scripts/_lawbot_verify.py            # 전 문항
     python3 scripts/_lawbot_verify.py --show 5       # 문항별 top-5 까지 출력
 
 판정:
     · @1·@3 이 기준선 ±1문항 안 → 좌표계 일치. 서빙 착수해도 된다.
     · 눈에 띄게 낮다 → 인입과 질의가 어긋난 것. 의심 순서는
-      ① gateway 모델 슬러그가 다름 ② 절단/재정규화 불일치 ③ CAP 불일치
+      ① 임베딩 모델이 다름 ② 절단/재정규화 불일치 ③ CAP 불일치
       ④ 인입이 덜 됨(행 수 확인) ⑤ 질의 프리픽스 누락.
 """
 import argparse, os, re, sys
