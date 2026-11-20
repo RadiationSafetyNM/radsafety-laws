@@ -16,7 +16,7 @@
 전제: .env 의 GEMINI_API_KEY · SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY.
 ⚠️ 생성은 실결제(질문 1건 ≈ $0.007). AI Studio 프로젝트 `radsafety` 월 상한을 서빙과 공유.
 """
-import argparse, json, os, sys
+import argparse, json, os, re, sys
 import requests
 import yaml
 
@@ -41,9 +41,29 @@ def _rpc(name, body):
     return r.json()
 
 
+CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
+
+
 def disp(row):
+    """근거 카드·프롬프트 [자료 n] 제목. 런타임 ask.ts 의 title() 과 같은 규칙.
+
+    · 조문: "법령 제N조제M항(조 제목)" — 항 라벨 ⑤ 는 '제5항' 으로 푼다.
+    · 별표: "법령 별표N 표1 행1~10 — 별표 제목(제N조 관련)". 별표 청크의 article 은 *위임 조문*이라
+      그걸 제목에 쓰면 별표가 조문으로 보인다(2026-11-21 수정 전 결함).
+    """
     m = row.get('metadata') or {}
-    return f"{m.get('law_title', '?')} {m.get('article', '')}{m.get('subunit', '')}".strip()
+    law, sub, at = m.get('law_title', '?'), m.get('subunit', ''), m.get('article_title', '')
+    if m.get('attachment_no'):
+        t = f"{law} {m['attachment_no']}"
+        if sub:
+            t += f' {sub}'
+        else:
+            pm = re.search(r'_p(\d+)$', row.get('chunk_id', ''))
+            if pm:
+                t += f' ({pm.group(1)}번째 부분)'
+        return f'{t} — {at}' if at else t
+    sub = re.sub(f'^([{CIRCLED}])\\s*', lambda x: f'제{CIRCLED.index(x.group(1)) + 1}항', sub)
+    return f"{law} {m.get('article', '')}{sub}" + (f'({at})' if at else '')
 
 
 def kdate(d):
