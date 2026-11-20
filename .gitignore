@@ -8,3 +8,6 @@ out/
 .env
 .env.*
 !.env.example
+
+# legalize-pipeline 판본 고정 체크아웃(_pipeline.py) — 남의 코드라 이력에 넣지 않는다
+.vendor/

@@ -77,6 +77,9 @@ scripts/
   _lawbot_verify.py          # 대조 검증 — 서빙 RPC 가 로컬 하네스와 같은 recall 을 내는지(인입 직후 필수)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
+  _collect_eflaw.py          # 시행일 기준 판본 수집 — 법제처 eflaw 직접(현행 1 + 시행예정 전부) → data/laws-effective/<법령>_<종류>@<시행일>_<MST>.md. ⚠️IP 등록 필요
+  _pipeline.py               # legalize-pipeline 변환기 차용(판본 고정 체크아웃 .vendor/) — 법제처 XML → 미러와 같은 마크다운. 직접 파싱하지 않는다
+  _amend_watch.py            # 일일 개정 감지 — 공포·발령일 범위 조회 1~2회로 워치리스트 교집합(법령 eflaw + 고시 admrul). 미러보다 앞단. ⚠️IP 등록 필요 · exit 0 없음/10 있음/2 API 실패
   _amend_selfdiff.py         # 자체 개정 diff — 조문 단위 비교(부칙 분리). API·IP 불필요, git 안에서 완결
   _amend_moleg.py            # 법제처 비교 API — 신구법비교(oldAndNew)·3단비교(thdCmp, ⚠️knd 필수). IP 등록 필요
   _amend_audit.py            # 교차검증 — 자체 diff ↔ 법제처 신구법비교 대조(AGREE/SELF_ONLY/API_ONLY) + 3단비교 파급
@@ -118,6 +121,21 @@ scripts/
 
 ---
 
+## 시행일 기준 판본 — `data/laws-effective/` (2026-11-20 신설, 결정 4)
+
+**현행본과 시행예정본을 따로 보관하고, 조문마다 자기 시행일을 갖게 한다.** 챗봇은 질문 시점에 시행 중인 판본으로 답하고, 시행예정본이 있으면 "○월 ○일부터 바뀝니다"를 덧붙인다. 그 원천이 이 폴더다.
+
+- **미러(`data/laws/`)로는 안 되는 이유**: 미러는 "가장 최근에 공포된 판본"을 준다. ① 아직 시행 전인 판본이 현행처럼 들어온다(2026-11-20: 법률 4건이 2027 시행분) ② 한 공포본에 시행일이 여럿이면 그 본문은 **어느 날짜의 실제 상태와도 다르다**(의료법: 2027-01-21 판본인데 2027-04-29 시행 조문이 섞여 있음).
+- **옳은 축은 `target=eflaw&MST=&efYd=`** — 그 날짜에 시행되는 통합 본문. 실측: 연속한 스냅샷 사이에 되돌림이 없고(앞선 개정이 뒤 판본에 모두 살아 있음), 같은 시행일에 걸린 서로 다른 MST 는 본문이 완전히 같다 → 시행일당 하나만 둔다.
+- **파일명** `<법령>_<종류>@<시행일>_<MST>.md`. **지우지도 옮기지도 않는다** — 현행이 어느 것인지는 폴더가 아니라 날짜(시행일 ≤ 오늘 중 가장 늦은 것)로 정한다. 시행일 0시에 돌 작업이 없다.
+- **과거(연혁)는 받지 않는다**(Dr. Ben 결정 — 현행과 미래에 집중). 오늘 이후 지나간 판본은 자연히 남는다.
+- **파싱은 직접 하지 않는다** — `_pipeline.py` 가 미러를 만드는 바로 그 변환기(legalize-pipeline, Apache-2.0)를 판본 고정으로 빌린다. `target=law` 본은 미러와 바이트 일치, `eflaw` 본은 공백만 다르다("삭제 <날짜>" 띄어쓰기·빈 줄). PIN 을 올릴 때는 `--check-mirror` 재확인.
+- 실행: `python3 scripts/_collect_eflaw.py` (새 스냅샷만 받음) · `--check-mirror` (미러 대조).
+- **하류 연결 (2026-11-20)**: `_build_chunks.py` 가 스냅샷을 시행일 순으로 훑어 **조문 판본 행**을 만든다 — 앞 스냅샷과 본문(공백 제거 비교)이 같으면 행을 잇고, 달라진 조문만 그 시행일로 새 행. 산출물 둘: `law_chunk_versions.jsonl`(전 판본, 키 `(chunk_id, effective_from)`, **DB 인입 원천**) · `law_chunks.jsonl`(기준일 `--as-of` 현행본만, chunk_id 고유 — 평가 도구용). `_embed_upsert.py` 는 versions 를 읽고, 본문은 같고 종료일만 생긴 행은 임베딩 없이 날짜만 고친다. 스키마 = `sql/001_lawbot_chunks.sql`(`lawbot_match(as_of)` · `lawbot_upcoming`).
+  - ⚠️ 첫 스냅샷 행의 `effective_from` 은 조문의 최초 시행일이 아니라 **우리가 가진 가장 이른 스냅샷의 시행일**이다. 뜻이 있는 날짜는 시행예정 행의 `effective_from` 과 `effective_to` 뿐.
+  - ⚠️ **고시·별표는 아직 판본을 가르지 않는다**(미러 최신본 1개). 별표는 미러 frontmatter 링크로 받으므로 시행 전 별표가 섞일 수 있다.
+  - ⚠️ 스키마는 DB 에 적용해 본 적이 없고, 평가셋도 새 코퍼스로 재측정하지 않았다.
+
 ## 신선도 감사 (data freshness audit)
 
 데이터 수집(위)은 legalize-kr 미러 경유라 **권위측(법제처)과의 시차를 스스로 검증 못 한다** — legalize-mcp·admrule-kr 도 같은 미러라 독립검증 불가. 그래서 `_freshness_audit.py` 가 **law.go.kr OpenAPI 를 직접 호출**해 우리 frontmatter `법령MST` ↔ 권위측 *최신 공포* MST 를 대조한다.
@@ -128,6 +146,7 @@ python3 scripts/_freshness_audit.py <OC> data/laws    # OC = benkorea.ai (가입
 
 - **비교축은 `target=eflaw`(시행일법령)** — `현행연혁코드`(시행예정/현행/연혁)로 *공포됐으나 미시행* 개정까지 본다. lawSearch `target=law`(현행)는 시행 중 버전만 줘서 시행예정 개정을 STALE 로 오판하므로 쓰지 않는다.
 - **⚠️ IP 등록 필요**: 데이터 수집과 달리 이건 OpenAPI 직접호출이라 **호출 PC 공인 IP 가 open.law.go.kr 에 등록**돼야 한다(동적 IP면 변경 시 재등록). lawService 본문은 `MST=` 파라미터(`ID=`는 법령ID 기대 — 혼동주의). 함정 상세: 메모리 `reference_moleg_openapi_gotchas`.
+- **매일 돌리는 쪽은 `_amend_watch.py`** (2026-11-20): 감사가 법령을 하나씩 조회해 표를 그린다면, 이쪽은 `ancYd`(법령)·`prmlYd`(고시) 기간 조회로 그 기간 공포분 전체를 받아 워치리스트와 교집합한다. 고시 축도 본다. `python3 scripts/_amend_watch.py [--days 14] [--format text|md|json]`. API 실패(등록 IP 변경 등)를 "개정 없음"으로 삼키지 않도록 exit 2 로 구분한다. 같은 날 공포본이 둘이면(일부개정+타법개정) 일련번호가 큰 쪽만 새 개정으로 본다.
 - **1차 실측(2026-06-29)**: 22/22 SYNC — 상류 지연 0건. 단 1회 스냅샷이라 *공포→legalize-kr 반영 며칠* cadence 측정은 시계열 반복 필요. 배경: 메모리 `project_radsafety_laws_freshness_lag`.
 - **OpenAPI 요청 파라미터·회신 필드 레퍼런스** → [`docs/law-go-kr-openapi.md`](docs/law-go-kr-openapi.md). `query`(법령명 전용) vs 전용 파라미터(`ancYd`·`org`·`efYd`…) 구분, 12 회신필드, 현행연혁코드 3값, 일일 개정감지 함의. 라이브 검증(✓)/미검증(○) 표기.
 

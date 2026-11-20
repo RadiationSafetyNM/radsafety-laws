@@ -10,15 +10,44 @@
   다운스트림(radsafety-pwa)이 이 JSONL 을 임베딩→pgvector upsert.
 
 법령(##### 제N조 헤딩)·고시(제N조( 라인시작) 두 구조 모두 처리.
-사용: python3 scripts/_build_chunks.py [laws] [admin] [parsed] [out.jsonl]
+
+── 조문 판본 (결정 4, 2026-11-20) ──────────────────────────────────────────
+행의 단위는 "조문"이 아니라 **조문의 한 판본**이고, 각 행이 자기 시행일을 갖는다.
+  effective_from  이 본문이 효력을 갖기 시작하는 날
+  effective_to    효력이 끝나는 날(다음 판본 시행일, 배타). None = 열림
+법령은 data/laws-effective/ 의 시행일 기준 스냅샷(_collect_eflaw.py)을 시행일 순으로 훑어,
+앞 스냅샷과 본문이 같은 조문은 행을 잇고 달라진 조문만 새 행을 만든다.
+
+산출물 둘:
+  law_chunk_versions.jsonl  전 판본(현행 + 시행예정 + 지나간 것). 키 = (chunk_id, effective_from).
+                            DB 인입의 원천.
+  law_chunks.jsonl          기준일(--as-of, 기본 한국 날짜 오늘)에 시행 중인 판본만.
+                            chunk_id 가 고유해 평가·검증 도구가 종전대로 읽는다.
+  ⚠️ 첫 스냅샷에서 나온 행의 effective_from 은 "그 조문이 처음 시행된 날"이 아니라
+     **우리가 가진 가장 이른 스냅샷의 시행일**이다(과거는 소급하지 않는다). "언제부터"로
+     보여 주지 말 것 — 뜻이 있는 날짜는 시행예정 행의 effective_from 과 effective_to 뿐이다.
+  ⚠️ 고시·별표는 아직 판본을 가르지 않는다(미러 최신본 1개, effective_to 없음).
+
+사용: python3 scripts/_build_chunks.py [--as-of YYYY-MM-DD] [laws] [admin] [parsed] [out.jsonl]
 """
-import sys, os, re, json, glob
+import sys, os, re, json, glob, datetime
 from collections import Counter, defaultdict
 
-LAWS = sys.argv[1] if len(sys.argv) > 1 else 'data/laws'
-ADMIN = sys.argv[2] if len(sys.argv) > 2 else 'data/admin-rules'
-PARSED = sys.argv[3] if len(sys.argv) > 3 else 'data/attachments-parsed'
-OUT = sys.argv[4] if len(sys.argv) > 4 else 'data/chunks/law_chunks.jsonl'
+_argv = sys.argv[1:]
+AS_OF = (datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+         .strftime('%Y-%m-%d'))
+if '--as-of' in _argv:
+    _i = _argv.index('--as-of')
+    AS_OF = _argv[_i + 1]
+    del _argv[_i:_i + 2]
+LAWS = _argv[0] if len(_argv) > 0 else 'data/laws'
+ADMIN = _argv[1] if len(_argv) > 1 else 'data/admin-rules'
+PARSED = _argv[2] if len(_argv) > 2 else 'data/attachments-parsed'
+OUT = _argv[3] if len(_argv) > 3 else 'data/chunks/law_chunks.jsonl'
+# 시행일 기준 스냅샷 폴더 — LAWS 옆에 둔다. 없으면 종전대로 미러(LAWS)만 쓴다.
+EFFECTIVE = os.environ.get('LAWS_EFFECTIVE',
+                           os.path.join(os.path.dirname(LAWS.rstrip('/')) or '.', 'laws-effective'))
+OUT_VERSIONS = os.path.join(os.path.dirname(OUT), 'law_chunk_versions.jsonl')
 
 MAXCHARS = 1800   # 이보다 긴 조는 항 단위로 분할
 
@@ -331,6 +360,8 @@ def build_attachment(path, parent_meta):
                   else ('' if plain_seq <= 1 else f'_p{plain_seq}'))
         recs.append({
             'chunk_id': f'{pm["law_id"]}#{att_no}' + suffix,
+            # 별표는 아직 판본을 가르지 않는다 — 모법 현행 스냅샷의 시행일을 물려받는다.
+            'effective_from': pm['enforce'], 'effective_to': None,
             'content': head + '\n\n' + seg,
             'metadata': {
                 'law_id': pm['law_id'], 'law_mst': pm['mst'], 'law_title': pm['title'],
@@ -352,9 +383,15 @@ def build_attachment(path, parent_meta):
     return recs
 
 
-def build(path, doctype):
+def build(path, doctype, register=True):
+    """문서 1건 → 청크들.
+
+    register=False 는 '현행이 아닌 스냅샷'용이다 — 별표가 상속할 모법 메타(parent_meta)와
+    삭제 조 통계를 건드리지 않는다. 스냅샷 파일명은 `<법령>_<종류>@<시행일>_<MST>` 이고,
+    별표 링크·모법 메타의 키는 `@` 앞의 기본 stem 이다(미러 파일명과 같다).
+    """
     fm, body = split_front_body(path)
-    stem = os.path.basename(path)[:-3]
+    stem = os.path.basename(path)[:-3].split('@')[0]
     if doctype == 'law':
         title = fval(fm, '제목')
         law_id = fval(fm, '법령ID') or fval(fm, '법령MST')
@@ -381,9 +418,10 @@ def build(path, doctype):
     hier = HIER.get(gubun, gubun)
     # 별표 청크가 모법 메타를 상속하도록 stem 기준으로 보관
     # (parsed 별표의 frontmatter `parent_law` 값 = 모법 md 파일 stem)
-    parent_meta[stem] = {'law_id': law_id, 'mst': mst, 'title': title, 'juris': juris,
-                         'hier': hier, 'enforce': enforce, 'promul': promul,
-                         'status': status, 'source': source}
+    if register:
+        parent_meta[stem] = {'law_id': law_id, 'mst': mst, 'title': title, 'juris': juris,
+                             'hier': hier, 'enforce': enforce, 'promul': promul,
+                             'status': status, 'source': source}
 
     recs = []
     for art, atitle, text in chunks:
@@ -391,7 +429,8 @@ def build(path, doctype):
             continue
         # 삭제된 조(내용 0 — 벡터 노이즈) 제외
         if re.match(r'^삭제\s*(&lt;.*?&gt;|<[^>]*>)?\s*$', text):
-            deleted[0] += 1
+            if register:
+                deleted[0] += 1
             continue
         art_no = norm_article(art)
         atts = att_map.get((stem, art_no), [])
@@ -406,6 +445,7 @@ def build(path, doctype):
             cid = f'{law_id}#{art}' + (f'_{sub}' if sub else '')
             recs.append({
                 'chunk_id': cid,
+                'effective_from': enforce, 'effective_to': None,
                 'content': content,
                 'metadata': {
                     'law_id': law_id, 'law_mst': mst, 'law_title': title,
@@ -430,12 +470,69 @@ att_orphan = []
 parent_meta = {}
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 allrecs = []
-for folder, dt in ((LAWS, 'law'), (ADMIN, 'admin_rule')):
-    if not os.path.isdir(folder):
-        continue
-    for fn in sorted(os.listdir(folder)):
+
+
+def _snap_key(path):
+    """`…@2027-01-01_286119.md` → ('2027-01-01', 286119)"""
+    m = re.search(r'@(\d{4}-\d{2}-\d{2})_(\d+)\.md$', path)
+    return (m.group(1), int(m.group(2)))
+
+
+_sq = lambda t: re.sub(r'\s+', '', t)
+
+
+def versioned(paths):
+    """한 법령의 스냅샷들(시행일 순) → 조문 판본 행.
+
+    앞 스냅샷과 본문이 같은 조문은 행을 그대로 잇고(새 행 없음), 달라졌거나 새로 생긴 조문만
+    그 스냅샷의 시행일을 effective_from 으로 새 행을 만든다. 사라진 조문(삭제, 또는 길어져
+    항 단위로 다시 쪼개진 경우)은 그 날짜로 닫는다.
+    비교는 공백을 지우고 한다 — 법제처 본문은 판본마다 빈 줄·띄어쓰기가 조금씩 다르다.
+    """
+    snaps = sorted(paths, key=_snap_key)
+    dates = [_snap_key(p)[0] for p in snaps]
+    live = [i for i, d in enumerate(dates) if d <= AS_OF]
+    cur = live[-1] if live else 0
+    if not live:
+        no_current.append(os.path.basename(snaps[0]).split('@')[0])
+    out, opened = [], {}
+    for i, p in enumerate(snaps):
+        d = dates[i]
+        seen = set()
+        for r in build(p, 'law', register=(i == cur)):
+            cid = r['chunk_id']
+            seen.add(cid)
+            o = opened.get(cid)
+            if o is not None and _sq(o['content']) == _sq(r['content']):
+                continue
+            if o is not None:
+                o['effective_to'] = d
+            r['effective_from'], r['effective_to'] = d, None
+            out.append(r)
+            opened[cid] = r
+        for cid in [c for c in opened if c not in seen]:
+            opened.pop(cid)['effective_to'] = d
+    return out
+
+
+no_current, mirror_only = [], []
+eff_groups = defaultdict(list)
+if os.path.isdir(EFFECTIVE):
+    for p in glob.glob(os.path.join(EFFECTIVE, '*@*.md')):
+        eff_groups[os.path.basename(p).split('@')[0]].append(p)
+mirror_stems = ({fn[:-3] for fn in os.listdir(LAWS) if fn.endswith('.md')}
+                if os.path.isdir(LAWS) else set())
+for stem in sorted(set(eff_groups) | mirror_stems):
+    if stem in eff_groups:
+        allrecs.extend(versioned(eff_groups[stem]))
+    else:
+        # 시행일 기준 스냅샷이 없는 법령 — 종전대로 미러 최신 공포본 1개(시행 전일 수 있다).
+        mirror_only.append(stem)
+        allrecs.extend(build(os.path.join(LAWS, stem + '.md'), 'law'))
+if os.path.isdir(ADMIN):
+    for fn in sorted(os.listdir(ADMIN)):
         if fn.endswith('.md'):
-            allrecs.extend(build(os.path.join(folder, fn), dt))
+            allrecs.extend(build(os.path.join(ADMIN, fn), 'admin_rule'))
 
 # 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
 for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
@@ -446,6 +543,19 @@ for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
 # upsert 가 서로를 **조용히 덮어쓴다** — 에러 없이 행이 사라지고, 검색만 나빠진다.
 # 부칙 삼킴 버그(§_slice)로 실제 569행이 이 경로로 사라질 뻔했다. 여기서 막는다.
 # 산출물을 쓰지 않고 실패시키는 이유: 깨진 청크 파일이 남으면 다음 단계가 그걸 그대로 먹는다.
+# 판본 도입(2026-11-20) 뒤로 키가 둘이다: 전 판본은 (chunk_id, effective_from),
+# 기준일 현행본은 chunk_id. 둘 다 고유해야 한다.
+versions = allrecs
+_vdup = {k: n for k, n in Counter((r['chunk_id'], r['effective_from']) for r in versions).items() if n > 1}
+if _vdup:
+    print(f'⛔ (chunk_id, effective_from) 중복 {len(_vdup)}개 — 산출 없이 중단합니다. 예: {list(_vdup.items())[:5]}')
+    sys.exit(1)
+_bad = [r['chunk_id'] for r in versions if not re.match(r'\d{4}-\d{2}-\d{2}$', r['effective_from'] or '')]
+if _bad:
+    print(f'⛔ 시행일 없는 행 {len(_bad)}개 — 산출 없이 중단합니다. 예: {_bad[:5]}')
+    sys.exit(1)
+allrecs = [r for r in versions
+           if r['effective_from'] <= AS_OF and (r['effective_to'] is None or r['effective_to'] > AS_OF)]
 _dup = {cid: n for cid, n in Counter(r['chunk_id'] for r in allrecs).items() if n > 1}
 if _dup:
     _by_law = Counter(r['metadata']['law_title'] for r in allrecs if r['chunk_id'] in _dup)
@@ -458,6 +568,9 @@ if _dup:
 with open(OUT, 'w', encoding='utf-8') as f:
     for r in allrecs:
         f.write(json.dumps(r, ensure_ascii=False) + '\n')
+with open(OUT_VERSIONS, 'w', encoding='utf-8') as f:
+    for r in versions:
+        f.write(json.dumps(r, ensure_ascii=False) + '\n')
 
 # ── 통계 ──
 by_dt = Counter(r['metadata']['document_type'] for r in allrecs)
@@ -469,7 +582,17 @@ split = sum(1 for r in allrecs if r['metadata']['subunit'])
 lens = [len(r['content']) for r in allrecs]
 avg = sum(lens) // max(len(allrecs), 1)
 over = sum(1 for x in lens if x > MAXCHARS + 400)   # 분할 후에도 큰 청크(항/호 없는 통짜)
-print(f'청크 {len(allrecs)}개 → {OUT} (삭제 조 {deleted[0]}개 · 삭제 별표 {att_deleted[0]}개 제외)')
+print(f'청크 {len(allrecs)}개 → {OUT} (기준일 {AS_OF} 현행 · 삭제 조 {deleted[0]}개 · 삭제 별표 {att_deleted[0]}개 제외)')
+_up = [r for r in versions if r['effective_from'] > AS_OF]
+_closing = [r for r in allrecs if r['effective_to']]
+_past = [r for r in versions if r['effective_to'] and r['effective_to'] <= AS_OF]
+print(f'  판본 {len(versions)}행 → {OUT_VERSIONS} (현행 {len(allrecs)} · 시행예정 {len(_up)} · 지나간 것 {len(_past)})')
+print(f'  현행 중 바뀔 예정인 청크 {len(_closing)}개 · 시행예정일 {len({r["effective_from"] for r in _up})}개 '
+      f'· 스냅샷 법령 {len(eff_groups)}건')
+if mirror_only:
+    print(f'  ⚠️ 시행일 기준 스냅샷 없는 법령 {len(mirror_only)}건 — 미러 최신 공포본 사용(시행 전일 수 있음): {mirror_only[:3]}')
+if no_current:
+    print(f'  ⛔ 기준일에 시행 중인 스냅샷이 없는 법령 {len(no_current)}건 — _collect_eflaw.py 재실행 필요: {no_current[:3]}')
 print(f'  document_type: {dict(by_dt)}')
 print(f'  jurisdiction:  {dict(by_j)}')
 print(f'  legal_hierarchy: {dict(by_h)}')
