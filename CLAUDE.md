@@ -77,6 +77,8 @@ scripts/
   _lawbot_verify.py          # 대조 검증 — 서빙 RPC 가 로컬 하네스와 같은 recall 을 내는지(인입 직후 필수)
   _collect_admrul_openapi.py # ⚠️ 폴백 전용 — 구 법제처 OpenAPI 판(OC+고정IP 필요). 평시 미사용.
   _freshness_audit.py        # 신선도 감사 — law.go.kr OpenAPI(권위) ↔ 우리 frontmatter MST 비교. ⚠️OpenAPI 직접호출이라 IP 등록 필요
+  _collect_attachments_effective.py  # 법령 별표 판본 — 스냅샷 별표 지문 연쇄 → 재사용 또는 직접 수집·파싱 → data/attachments-effective/manifest.json
+  _ask.py                    # 질문→검색→답변 기준 구현(radsafety-lawbot 런타임의 원본). 공용 프롬프트 = _prompt.py
   _collect_eflaw.py          # 시행일 기준 판본 수집 — 법제처 eflaw 직접(현행 1 + 시행예정 전부) → data/laws-effective/<법령>_<종류>@<시행일>_<MST>.md. ⚠️IP 등록 필요
   _pipeline.py               # legalize-pipeline 변환기 차용(판본 고정 체크아웃 .vendor/) — 법제처 XML → 미러와 같은 마크다운. 직접 파싱하지 않는다
   _amend_watch.py            # 일일 개정 감지 — 공포·발령일 범위 조회 1~2회로 워치리스트 교집합(법령 eflaw + 고시 admrul). 미러보다 앞단. ⚠️IP 등록 필요 · exit 0 없음/10 있음/2 API 실패
@@ -133,8 +135,13 @@ scripts/
 - 실행: `python3 scripts/_collect_eflaw.py` (새 스냅샷만 받음) · `--check-mirror` (미러 대조).
 - **하류 연결 (2026-11-20)**: `_build_chunks.py` 가 스냅샷을 시행일 순으로 훑어 **조문 판본 행**을 만든다 — 앞 스냅샷과 본문(공백 제거 비교)이 같으면 행을 잇고, 달라진 조문만 그 시행일로 새 행. 산출물 둘: `law_chunk_versions.jsonl`(전 판본, 키 `(chunk_id, effective_from)`, **DB 인입 원천**) · `law_chunks.jsonl`(기준일 `--as-of` 현행본만, chunk_id 고유 — 평가 도구용). `_embed_upsert.py` 는 versions 를 읽고, 본문은 같고 종료일만 생긴 행은 임베딩 없이 날짜만 고친다. 스키마 = `sql/001_lawbot_chunks.sql`(`lawbot_match(as_of)` · `lawbot_upcoming`).
   - ⚠️ 첫 스냅샷 행의 `effective_from` 은 조문의 최초 시행일이 아니라 **우리가 가진 가장 이른 스냅샷의 시행일**이다. 뜻이 있는 날짜는 시행예정 행의 `effective_from` 과 `effective_to` 뿐.
-  - ⚠️ **고시·별표는 아직 판본을 가르지 않는다**(미러 최신본 1개). 별표는 미러 frontmatter 링크로 받으므로 시행 전 별표가 섞일 수 있다.
-  - ⚠️ 스키마는 DB 에 적용해 본 적이 없고, 평가셋도 새 코퍼스로 재측정하지 않았다.
+  - **법령 별표 판본 (2026-11-20)**: `_collect_eflaw.py` 가 스냅샷마다 `<스냅샷>.별표.json`(별표번호·제목·원본/PDF 링크·본문 지문 sha)을 남기고, `_collect_attachments_effective.py` 가 지문 연쇄로 **별표 판본**을 만든다 → `data/attachments-effective/manifest.json`. 미러가 받은 판본과 지문이 같으면 `attachments-parsed/` 의 md 를 **재사용**(수동 hwpx·교정 오버레이 보존), 다르면 스냅샷 링크로 원본+PDF 를 받아 `attachments-effective/src/<시행일>/` → `parsed/<시행일>/` 로 파싱. 미러 판본 지문은 `mirror-sha.json`(MST 불변이라 영구 캐시). `_build_chunks.py` 는 manifest 가 맡은 법령의 별표를 미러 파싱본 대신 판본별로 만든다. 첫 실행에서 원자력안전법 시행령 별표 7·9·10의2·10의3 이 11-17 개정 전 판본이었음을 잡아 교체했다.
+  - ⚠️ **고시와 고시 별표는 아직 판본을 가르지 않는다**(미러 최신본 1개).
+  - 개발 DB(`radsafety-lawbot-dev`) 적용·인입 완료(2026-11-20), 대조 검증 34문항 @3 91%.
+
+## 개정 추적 대장 — `data/amendment-tracker.yaml` (2026-11-20 Dr. Ben 확정)
+
+공포 **전** 개정 동향(원안위 의결·입법예고·법제처 심사)을 한 건 한 항목으로 적는다. **답변 근거로 쓰지 않는다** — 챗봇은 답변과 분리된 "입법 진행 중 — 확정 아님" 상자로만 보여 준다(생성 모델에 넘기지 않음). 매칭 = 검색 근거가 `law`+`targets` 에 해당하거나 질문에 `keywords` 가 있을 때. 공포되면 `status` 갱신, 시행일 판본이 수집돼 "○월 ○일부터" 가 붙기 시작하면 `closed: true`. 런타임 반영은 `radsafety-lawbot` 에서 `npm run sync-tracker`. 첫 항목: 수정체 등가선량한도 강화(2027-01-01 목표, 보도 기준).
 
 ## 신선도 감사 (data freshness audit)
 

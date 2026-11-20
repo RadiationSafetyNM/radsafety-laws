@@ -21,13 +21,17 @@
 
 변환은 _pipeline.py (legalize-pipeline 판본 고정 차용). 직접 파싱하지 않는다.
 
+별표 목록(2026-11-20~): 같은 응답의 <별표단위> 를 스냅샷 옆 `<스냅샷>.별표.json` 으로 남긴다
+(번호·제목·별표시행일자·원본/PDF 링크·본문 지문). 별표의 판본 구분은 이 지문으로 한다 —
+_collect_attachments_effective.py 가 소비한다. 서식(별지)은 빈 양식이라 담지 않는다.
+
 사용:
   python3 _collect_eflaw.py                  # 수집 (새 스냅샷만)
   python3 _collect_eflaw.py --check-mirror   # 수집 없이, 미러(data/laws)와 대조만
   python3 _collect_eflaw.py --force          # 있는 것도 다시 받기
 종료 코드: 0 정상 / 2 API 실패. 전제: 등록 IP + env MOLEG_OC.
 """
-import os, re, sys, glob, argparse, datetime
+import os, re, sys, glob, json, hashlib, argparse, datetime
 import urllib.request, urllib.parse
 import xml.etree.ElementTree as ET
 from _watchlist import members
@@ -87,12 +91,36 @@ def snapshots(member):
     return list(by_date.values())
 
 
-def fetch_markdown(mst, efyd):
+def fetch_raw(mst, efyd):
     raw = _get('lawService.do', target='eflaw', MST=mst, efYd=efyd)
     if b'<\xec\xa1\xb0\xeb\xac\xb8\xeb\x8b\xa8\xec\x9c\x84' not in raw:   # <조문단위
         raise ApiError(f'MST {mst} efYd {efyd}: 본문 없음 — ' +
                        re.sub(r'<[^>]+>', ' ', raw.decode('utf-8', 'ignore'))[:120].strip())
-    return _pipeline.law_xml_to_markdown(raw, mst)
+    return raw
+
+
+def attachment_units(raw):
+    """<별표단위> 중 별표만 → 목록. sha = 공백을 지운 별표내용의 지문(판본 구분 키)."""
+    out = []
+    for u in ET.fromstring(raw).iter('별표단위'):
+        if (u.findtext('별표구분') or '').strip() != '별표':
+            continue
+        body = u.findtext('별표내용') or ''
+        link = lambda tag: ('https://www.law.go.kr' + u.findtext(tag).strip()) if (u.findtext(tag) or '').strip() else ''
+        out.append({
+            'no': (u.findtext('별표번호') or '').strip(), 'branch': (u.findtext('별표가지번호') or '').strip(),
+            'title': (u.findtext('별표제목') or '').strip(),
+            'efyd': (u.findtext('별표시행일자') or '').strip(),
+            'file_link': link('별표서식파일링크'), 'pdf_link': link('별표서식PDF파일링크'),
+            'hwp_name': (u.findtext('별표HWP파일명') or '').strip(),
+            'sha': hashlib.sha1(re.sub(r'\s+', '', body).encode()).hexdigest()[:16],
+        })
+    return out
+
+
+def write_sidecar(path, raw):
+    with open(path[:-3] + '.별표.json', 'w', encoding='utf-8') as f:
+        json.dump(attachment_units(raw), f, ensure_ascii=False, indent=1)
 
 
 def fname(member, efyd, mst):
@@ -135,18 +163,21 @@ def main():
                     print(f'{label:<34} @{efyd} MST {mst}  미러 대조: {same}')
                     continue
                 if os.path.exists(path) and not a.force:
+                    if not os.path.exists(path[:-3] + '.별표.json'):   # 별표 목록 도입 전 스냅샷
+                        write_sidecar(path, fetch_raw(mst, efyd))
                     kept += 1
                     continue
-                md = fetch_markdown(mst, efyd)
+                raw = fetch_raw(mst, efyd)
                 with open(path, 'w', encoding='utf-8') as f:
-                    f.write(md)
+                    f.write(_pipeline.law_xml_to_markdown(raw, mst))
+                write_sidecar(path, raw)
                 new += 1
                 print(f'+ {label:<34} 시행 {efyd} ({state}) · 공포 {pub} {kind} · MST {mst}')
     except (ApiError, OSError) as ex:
         print(f'⛔ 법제처 API 실패: {ex}\n   등록 IP 확인: curl -s https://api.ipify.org', file=sys.stderr)
         return 2
     if not a.check_mirror:
-        total = len(glob.glob(os.path.join(OUT, '*.md')))
+        total = len(glob.glob(os.path.join(OUT, '*@*.md')))
         print(f'새 스냅샷 {new} · 기존 유지 {kept} · 폴더 총 {total}')
     return 0
 

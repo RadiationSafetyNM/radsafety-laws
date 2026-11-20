@@ -26,12 +26,15 @@
   ⚠️ 첫 스냅샷에서 나온 행의 effective_from 은 "그 조문이 처음 시행된 날"이 아니라
      **우리가 가진 가장 이른 스냅샷의 시행일**이다(과거는 소급하지 않는다). "언제부터"로
      보여 주지 말 것 — 뜻이 있는 날짜는 시행예정 행의 effective_from 과 effective_to 뿐이다.
-  ⚠️ 고시·별표는 아직 판본을 가르지 않는다(미러 최신본 1개, effective_to 없음).
+  법령 별표도 판본을 가른다(2026-11-20) — data/attachments-effective/manifest.json
+  (_collect_attachments_effective.py 산출)의 판본마다 청크를 만들고 그 시행일·종료일을 붙인다.
+  ⚠️ 고시와 고시 별표는 아직 판본을 가르지 않는다(미러 최신본 1개, effective_to 없음).
 
 사용: python3 scripts/_build_chunks.py [--as-of YYYY-MM-DD] [laws] [admin] [parsed] [out.jsonl]
 """
 import sys, os, re, json, glob, datetime
 from collections import Counter, defaultdict
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 _argv = sys.argv[1:]
 AS_OF = (datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
@@ -535,7 +538,17 @@ if os.path.isdir(ADMIN):
             allrecs.extend(build(os.path.join(ADMIN, fn), 'admin_rule'))
 
 # 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
+# 법령 별표 = 판본 manifest(시행일 기준) / 고시 별표 = 미러 파싱본 1개(판본 미분리).
+MANIFEST = os.path.join(os.path.dirname(PARSED), 'attachments-effective', 'manifest.json')
+att_versions = json.load(open(MANIFEST, encoding='utf-8')) if os.path.exists(MANIFEST) else []
+att_stems = {v['stem'] for v in att_versions}
+for v in att_versions:
+    for r in build_attachment(os.path.join(ROOT_DIR, v['md']), parent_meta):
+        r['effective_from'], r['effective_to'] = v['effective_from'], v['effective_to']
+        allrecs.append(r)
 for mdp in sorted(glob.glob(os.path.join(PARSED, '*.md'))):
+    if any(mdp.endswith(f'({st}).md') for st in att_stems):
+        continue        # 판본 manifest 가 맡은 법령의 별표 — 미러 파싱본은 쓰지 않는다
     allrecs.extend(build_attachment(mdp, parent_meta))
 
 # ── chunk_id 고유성 가드 (2026-08-04 신설) ────────────────────────────────
@@ -615,6 +628,9 @@ src_stems = {os.path.splitext(f)[0] for f in os.listdir(ATT_SRC)
              if f.startswith('[별표]') and f.lower().endswith(('.hwp', '.hwpx'))} \
     if os.path.isdir(ATT_SRC) else set()
 parsed_stems = {os.path.basename(p)[:-3] for p in glob.glob(os.path.join(PARSED, '*.md'))}
+# 판본 manifest 가 맡은 법령은 미러 원본을 쓰지 않으므로 짝 검사에서 뺀다(manifest 쪽은
+# _collect_attachments_effective.py 가 파싱본 누락을 exit 3 으로 막는다).
+src_stems = {s for s in src_stems if not any(s.endswith(f'({st})') for st in att_stems)}
 unparsed = sorted(src_stems - parsed_stems)
 orphaned = sorted(parsed_stems - src_stems)
 if unparsed:

@@ -6,7 +6,8 @@
   2. 현행 검색              RPC lawbot_match(as_of)      — 기준일에 시행 중인 판본만
   3. 시행예정 조회          RPC lawbot_upcoming(chunk_ids) — 회수된 조문의 미래 판본
   4. 생성                   Gemini (결정 1.6) — _prompt.SYS + SYS_UPCOMING
-  반환: 답변 · 근거 조문(시행일) · 시행예정 조문(시행일)
+  5. 개정 추적 대장 매칭    data/amendment-tracker.yaml — 공포 전 동향. **생성에 넘기지 않고** 따로 반환
+  반환: 답변 · 근거 조문(시행일) · 시행예정 조문(시행일) · 입법 진행 중(확정 아님)
 
 사용:
   python3 scripts/_ask.py "방사선작업종사자의 선량한도는?"
@@ -17,6 +18,7 @@
 """
 import argparse, json, os, sys
 import requests
+import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query            # noqa: E402  (.env 로드 포함)
@@ -83,6 +85,26 @@ def generate(prompt):
     return txt, d.get('usageMetadata', {})
 
 
+TRACKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'amendment-tracker.yaml')
+
+
+def pending(question, hits):
+    """개정 추적 대장에서 이 질문·근거에 걸리는 열린 항목. 런타임(tracker.ts)과 같은 규칙."""
+    items = (yaml.safe_load(open(TRACKER, encoding='utf-8')) or {}).get('items', [])
+    got = []
+    for it in items:
+        if it.get('closed'):
+            continue
+        by_kw = any(k in question for k in it.get('keywords', []))
+        by_src = any((h.get('metadata') or {}).get('law_title') == it['law'] and
+                     ((h['metadata'].get('attachment_no') in it.get('targets', [])) or
+                      (h['metadata'].get('article') in it.get('targets', [])))
+                     for h in hits)
+        if by_kw or by_src:
+            got.append(it)
+    return got
+
+
 def ask(question, as_of=None):
     hits, up = retrieve(question, as_of)
     answer, usage = generate(build_prompt(question, hits, up, as_of))
@@ -91,6 +113,7 @@ def ask(question, as_of=None):
         'sources': [{'chunk_id': h['chunk_id'], 'title': disp(h), 'effective_from': h['effective_from'],
                      'effective_to': h.get('effective_to'), 'similarity': round(h['similarity'], 3)} for h in hits],
         'upcoming': [{'chunk_id': u['chunk_id'], 'title': disp(u), 'effective_from': u['effective_from']} for u in up],
+        'pending': pending(question, hits),
         'usage': {'in': usage.get('promptTokenCount'), 'out': usage.get('candidatesTokenCount')},
     }
 
@@ -114,6 +137,9 @@ def main():
         print('── 시행예정 판본')
         for u in out['upcoming']:
             print(f"  {u['effective_from']} {u['title']}")
+    for it in out['pending']:
+        print(f"── 입법 진행 중(확정 아님): {it['title']} — {it['current']} → {it['proposed']} "
+              f"· {it['status']} · 시행 목표 {it.get('expected_effective', '미정')} · {it['confidence']}")
     print(f"── 토큰 입력 {out['usage']['in']} · 출력 {out['usage']['out']}")
 
 
