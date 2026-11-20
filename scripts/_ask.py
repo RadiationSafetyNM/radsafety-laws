@@ -2,7 +2,7 @@
 """질문 1건 → 검색 → 답변. **서빙 경로의 기준 구현**(챗 런타임이 TS 로 옮겨 적을 원본).
 
 흐름 (결정 4 — 현행으로 답하고, 바뀔 예정이면 덧붙인다):
-  1. 질의 임베딩            _embed.embed_query  (gemini-embedding-001 · RETRIEVAL_QUERY · 1024)
+  1. 질의 임베딩            _query.expand(용어 병기) → _embed.embed_query  (gemini-embedding-001 · RETRIEVAL_QUERY · 1024)
   2. 현행 검색              RPC lawbot_match(as_of)      — 기준일에 시행 중인 판본만
   3. 시행예정 조회          RPC lawbot_upcoming(chunk_ids) — 회수된 조문의 미래 판본
   4. 생성                   Gemini (결정 1.6) — _prompt.SYS + SYS_UPCOMING
@@ -23,6 +23,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query            # noqa: E402  (.env 로드 포함)
 from _prompt import SYS, SYS_UPCOMING     # noqa: E402
+from _query import expand                 # noqa: E402
 
 GEN_MODEL = os.environ.get('GEN_MODEL', 'gemini-3.6-flash')
 GEMINI_EP = 'https://generativelanguage.googleapis.com/v1beta'
@@ -51,7 +52,7 @@ def kdate(d):
 
 
 def retrieve(question, as_of=None, k=TOPK):
-    vec = '[' + ','.join(f'{x:.7f}' for x in embed_query(question)) + ']'
+    vec = '[' + ','.join(f'{x:.7f}' for x in embed_query(expand(question))) + ']'   # 검색에만 용어 병기
     hits = _rpc('lawbot_match', {'query_embedding': vec, 'match_count': k, 'as_of': as_of})
     up = _rpc('lawbot_upcoming', {'chunk_ids': [h['chunk_id'] for h in hits], 'as_of': as_of}) if hits else []
     return hits, up[:UP_MAX]

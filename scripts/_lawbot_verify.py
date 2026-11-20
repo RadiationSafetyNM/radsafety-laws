@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query   # noqa: E402
 from _match import norm, match   # noqa: E402
+from _query import expand        # noqa: E402
 
 VAULT = os.path.expanduser('~/projects/2nd-brain-vault')
 EVAL = f'{VAULT}/knowledge/01_projects/2026-01_RadSafety-pwa/RadSafety-lawbot/lawbot-평가셋.yaml'
@@ -62,6 +63,7 @@ def rpc_match(url, key, vec, k):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--show', type=int, default=0, help='문항별 top-N 회수 결과 출력')
+    ap.add_argument('--no-expand', action='store_true', help='용어 병기(_query.expand) 끄기 — 사전 효과 비교용')
     a = ap.parse_args()
 
     url = (os.environ.get('SUPABASE_URL') or '').rstrip('/')
@@ -81,7 +83,8 @@ def main():
     hits = {k: 0 for k in K}
     misses = []
     for q in scored:
-        rows = rpc_match(url, key, embed_query(q['question']), max(K))
+        qq = q['question'] if a.no_expand else expand(q['question'])   # 서빙과 같은 검색 질의
+        rows = rpc_match(url, key, embed_query(qq), max(K))
         exp = q.get('expected_sources', [])
         best = next((i + 1 for i, row in enumerate(rows) if match(exp, unit_of(row))), None)
         for k in K:
