@@ -9,6 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/_collect_admrul.py data/admin-rules
+# 고시 시행일 판본(현행 + 시행예정) — admrule-kr 커밋 이력(GitHub API, GITHUB_TOKEN 있으면 사용).
+python3 scripts/_collect_admrul_effective.py
 python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
 # 서식·별지 메타 레지스트리(빈 양식 카탈로그) — 순수 python, IP·도구 무관(CI 가능).
 python3 scripts/_build_forms_registry.py data/laws data/admin-rules data/attachments data/attachments-forms-registry.md

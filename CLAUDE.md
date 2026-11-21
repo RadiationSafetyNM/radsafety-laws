@@ -80,6 +80,7 @@ scripts/
   _collect_attachments_effective.py  # 법령 별표 판본 — 스냅샷 별표 지문 연쇄 → 재사용 또는 직접 수집·파싱 → data/attachments-effective/manifest.json
   _ask.py                    # 질문→검색→답변 기준 구현(radsafety-lawbot 런타임의 원본). 공용 프롬프트 = _prompt.py
   _collect_eflaw.py          # 시행일 기준 판본 수집 — 법제처 eflaw 직접(현행 1 + 시행예정 전부) → data/laws-effective/<법령>_<종류>@<시행일>_<MST>.md. ⚠️IP 등록 필요
+  _collect_admrul_effective.py # 고시 시행일 판본 — admrule-kr 커밋 이력(현행 1 + 시행예정 전부) → data/admin-rules-effective/. IP 무관(CI)
   _pipeline.py               # legalize-pipeline 변환기 차용(판본 고정 체크아웃 .vendor/) — 법제처 XML → 미러와 같은 마크다운. 직접 파싱하지 않는다
   _amend_watch.py            # 일일 개정 감지 — 공포·발령일 범위 조회 1~2회로 워치리스트 교집합(법령 eflaw + 고시 admrul). 미러보다 앞단. ⚠️IP 등록 필요 · exit 0 없음/10 있음/2 API 실패
   _amend_selfdiff.py         # 자체 개정 diff — 조문 단위 비교(부칙 분리). API·IP 불필요, git 안에서 완결
@@ -136,7 +137,9 @@ scripts/
 - **하류 연결 (2026-11-20)**: `_build_chunks.py` 가 스냅샷을 시행일 순으로 훑어 **조문 판본 행**을 만든다 — 앞 스냅샷과 본문(공백 제거 비교)이 같으면 행을 잇고, 달라진 조문만 그 시행일로 새 행. 산출물 둘: `law_chunk_versions.jsonl`(전 판본, 키 `(chunk_id, effective_from)`, **DB 인입 원천**) · `law_chunks.jsonl`(기준일 `--as-of` 현행본만, chunk_id 고유 — 평가 도구용). `_embed_upsert.py` 는 versions 를 읽고, 본문은 같고 종료일만 생긴 행은 임베딩 없이 날짜만 고친다. 스키마 = `sql/001_lawbot_chunks.sql`(`lawbot_match(as_of)` · `lawbot_upcoming`).
   - ⚠️ 첫 스냅샷 행의 `effective_from` 은 조문의 최초 시행일이 아니라 **우리가 가진 가장 이른 스냅샷의 시행일**이다. 뜻이 있는 날짜는 시행예정 행의 `effective_from` 과 `effective_to` 뿐.
   - **법령 별표 판본 (2026-11-20)**: `_collect_eflaw.py` 가 스냅샷마다 `<스냅샷>.별표.json`(별표번호·제목·원본/PDF 링크·본문 지문 sha)을 남기고, `_collect_attachments_effective.py` 가 지문 연쇄로 **별표 판본**을 만든다 → `data/attachments-effective/manifest.json`. 미러가 받은 판본과 지문이 같으면 `attachments-parsed/` 의 md 를 **재사용**(수동 hwpx·교정 오버레이 보존), 다르면 스냅샷 링크로 원본+PDF 를 받아 `attachments-effective/src/<시행일>/` → `parsed/<시행일>/` 로 파싱. 미러 판본 지문은 `mirror-sha.json`(MST 불변이라 영구 캐시). `_build_chunks.py` 는 manifest 가 맡은 법령의 별표를 미러 파싱본 대신 판본별로 만든다. 첫 실행에서 원자력안전법 시행령 별표 7·9·10의2·10의3 이 11-17 개정 전 판본이었음을 잡아 교체했다.
-  - ⚠️ **고시와 고시 별표는 아직 판본을 가르지 않는다**(미러 최신본 1개).
+  - **고시 본문 판본 (2026-11-21)**: `_collect_admrul_effective.py` 가 admrule-kr **커밋 이력**(발령마다 커밋 1개, GitHub API — IP 무관·CI 가능)을 최신부터 거슬러 올라가 시행일자 > 기준일인 판본은 전부, ≤ 기준일인 첫 판본(현행)까지 받는다 → `data/admin-rules-effective/<고시>@<시행일>_<행정규칙일련번호>.md`. 규약은 laws-effective 와 같고 `_build_chunks.py` 가 같은 연쇄로 읽는다(폴더에 없는 고시만 미러 최신본). 한계: 미러 고시 본문에 부칙이 없어 조문별 시행일은 모른다(판본 전체가 frontmatter 시행일자 하나로 움직인다고 본다). 첫 실행에서 「진단용 방사선 안전관리책임자에 대한 교육 및 교육기관 지정」 2026-19(11-18 시행)를 잡아 2023년판 교체 — 주간 CI 가 11-15 에 돌아 놓친 건.
+  - **인입 시 옛 판본 정리**: 현행본이 새 판본으로 바뀌면 옛 현행본 행은 코퍼스에서 빠지지만 DB 엔 effective_to 없이 남아 **두 판본이 함께 현행으로 검색된다**. `_embed_upsert.py --prune` 이 같은 문서에 더 늦은 판본이 있는 행만 지운다(없으면 경고만).
+  - ⚠️ **고시 별표는 아직 판본을 가르지 않는다**(미러 파싱본 1개, 시행일은 부모 고시 것을 물려받는다).
   - 개발 DB(`radsafety-lawbot-dev`) 적용·인입 완료(2026-11-20), 대조 검증 34문항 @3 91%.
 
 ## 개정 추적 대장 — `data/amendment-tracker.yaml` (2026-11-20 Dr. Ben 확정)

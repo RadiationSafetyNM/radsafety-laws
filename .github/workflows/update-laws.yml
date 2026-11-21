@@ -25,6 +25,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 디렉토리 listing rate limit 60→5000
         run: python3 scripts/_collect_admrul.py data/admin-rules
 
+      # 고시 시행일 판본(현행 + 시행예정) — admrule-kr 커밋 이력, IP 무관(2026-11-21).
+      # _build_chunks.py 가 이 폴더를 법령과 같은 판본 연쇄로 읽는다.
+      - name: Fetch admin-rules 시행일 판본 (admrule-kr 커밋 이력)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/_collect_admrul_effective.py
+
       - name: Fetch attachments 별표 (law.go.kr flDownload · 공개)
         run: python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
 
@@ -85,7 +92,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/laws data/admin-rules data/attachments \
+          git add data/laws data/admin-rules data/admin-rules-effective data/attachments \
                   data/chunks data/attachments-forms-registry.md
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"

@@ -17,6 +17,9 @@
     # ④ 강제 전량 재임베딩 (모델·차원·CAP 을 바꿨을 때만)
     python3 scripts/_embed_upsert.py --force
 
+    # ⑤ 현행본이 새 판본으로 바뀐 뒤 — 옛 판본 행 정리(없으면 두 판본이 함께 현행으로 잡힌다)
+    python3 scripts/_embed_upsert.py --prune
+
 필요 환경변수(`.env`):
     GEMINI_API_KEY              Gemini API — 임베딩(gemini-embedding-001, §결정 1.8)
     SUPABASE_URL                dev 프로젝트 URL  ⚠️ §결정3 — 라이브 DB 에서 개발 금지
@@ -106,11 +109,21 @@ def close_row(url, key, r):
         raise RuntimeError(f'close {resp.status_code}: {resp.text[:300]}')
 
 
+def delete_row(url, key, cid, ef):
+    resp = requests.delete(f'{url}/rest/v1/lawbot_chunks', timeout=60,
+                           params={'chunk_id': f'eq.{cid}', 'effective_from': f'eq.{ef}'},
+                           headers={'apikey': key, 'Authorization': f'Bearer {key}'})
+    if not resp.ok:
+        raise RuntimeError(f'delete {resp.status_code}: {resp.text[:300]}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='임베딩·업서트 없이 코퍼스만 검증')
     ap.add_argument('--limit', type=int, default=0, help='앞에서 N개만 처리(시험용)')
     ap.add_argument('--force', action='store_true', help='content_sha 가 같아도 전량 재임베딩')
+    ap.add_argument('--prune', action='store_true',
+                    help='DB 에만 남은 행 중 같은 문서의 더 새 판본으로 대체된 것을 지운다')
     a = ap.parse_args()
 
     rows = load_chunks()
@@ -156,8 +169,26 @@ def main():
     stale = set(existing) - {KEY(r) for r in rows}
     print(f'기존 {len(existing)}행 · 인입 대상 {len(todo)}행'
           f'{" (--force)" if a.force else " (변경분만)"} · 종료일만 갱신 {len(closing)}행')
-    if stale and not a.limit:
-        print(f'  ⚠ DB 에만 있는 행 {len(stale)}건 — 지우지 않았습니다(판본이 철회됐을 수 있음). 예: {sorted(stale)[:3]}')
+    # 대체된 행(superseded) = 같은 문서(chunk_id 의 '#' 앞 = 법령·고시 ID)에 그보다 늦은 시행일의
+    # 판본이 코퍼스에 있는 행. 현행본이 새 판본으로 바뀌면 옛 현행본 행은 코퍼스에서 빠지는데
+    # (연혁은 싣지 않는다) DB 에는 effective_to 없이 남아 **두 판본이 함께 현행으로 검색된다**.
+    # 2026-11-21 고시 판본 도입 때 실제로 생긴 경우라 옵션으로 지운다. 그 밖의 stale 은 그대로 둔다.
+    newest = {}
+    for r in rows:
+        d = r['chunk_id'].split('#')[0]
+        newest[d] = max(newest.get(d, ''), r['effective_from'])
+    superseded = sorted(k for k in stale if newest.get(k[0].split('#')[0], '') > k[1])
+    other = len(stale) - len(superseded)
+    if superseded and not a.limit:
+        if a.prune:
+            for cid, ef in superseded:
+                delete_row(url, key, cid, ef)
+            print(f'  🗑 대체된 옛 판본 {len(superseded)}행 삭제 (--prune). 예: {superseded[:3]}')
+        else:
+            print(f'  ⚠ 대체된 옛 판본 {len(superseded)}행이 DB 에 남아 함께 현행으로 검색됩니다 — '
+                  f'--prune 으로 지우십시오. 예: {superseded[:3]}')
+    if other and not a.limit:
+        print(f'  ⚠ DB 에만 있는 행 {other}건 — 지우지 않았습니다(판본이 철회됐을 수 있음).')
     for r in closing:
         close_row(url, key, r)
     if not todo:

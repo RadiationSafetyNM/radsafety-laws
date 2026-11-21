@@ -28,7 +28,9 @@
      보여 주지 말 것 — 뜻이 있는 날짜는 시행예정 행의 effective_from 과 effective_to 뿐이다.
   법령 별표도 판본을 가른다(2026-11-20) — data/attachments-effective/manifest.json
   (_collect_attachments_effective.py 산출)의 판본마다 청크를 만들고 그 시행일·종료일을 붙인다.
-  ⚠️ 고시와 고시 별표는 아직 판본을 가르지 않는다(미러 최신본 1개, effective_to 없음).
+  고시 본문도 판본을 가른다(2026-11-21) — data/admin-rules-effective/(_collect_admrul_effective.py,
+  admrule-kr 커밋 이력)를 법령과 같은 연쇄로 훑는다. 판본 폴더에 없는 고시만 미러 최신본 1개.
+  ⚠️ 고시 별표는 아직 판본을 가르지 않는다(미러 파싱본 1개, effective_to 없음).
 
 사용: python3 scripts/_build_chunks.py [--as-of YYYY-MM-DD] [laws] [admin] [parsed] [out.jsonl]
 """
@@ -50,6 +52,9 @@ OUT = _argv[3] if len(_argv) > 3 else 'data/chunks/law_chunks.jsonl'
 # 시행일 기준 스냅샷 폴더 — LAWS 옆에 둔다. 없으면 종전대로 미러(LAWS)만 쓴다.
 EFFECTIVE = os.environ.get('LAWS_EFFECTIVE',
                            os.path.join(os.path.dirname(LAWS.rstrip('/')) or '.', 'laws-effective'))
+# 고시 판본 폴더(_collect_admrul_effective.py, 2026-11-21) — ADMIN 옆. 없으면 미러(ADMIN)만.
+ADMIN_EFFECTIVE = os.environ.get('ADMIN_EFFECTIVE',
+                                 os.path.join(os.path.dirname(ADMIN.rstrip('/')) or '.', 'admin-rules-effective'))
 OUT_VERSIONS = os.path.join(os.path.dirname(OUT), 'law_chunk_versions.jsonl')
 
 MAXCHARS = 1800   # 이보다 긴 조는 항 단위로 분할
@@ -484,8 +489,8 @@ def _snap_key(path):
 _sq = lambda t: re.sub(r'\s+', '', t)
 
 
-def versioned(paths):
-    """한 법령의 스냅샷들(시행일 순) → 조문 판본 행.
+def versioned(paths, doctype='law'):
+    """한 법령(또는 고시)의 스냅샷들(시행일 순) → 조문 판본 행.
 
     앞 스냅샷과 본문이 같은 조문은 행을 그대로 잇고(새 행 없음), 달라졌거나 새로 생긴 조문만
     그 스냅샷의 시행일을 effective_from 으로 새 행을 만든다. 사라진 조문(삭제, 또는 길어져
@@ -502,7 +507,7 @@ def versioned(paths):
     for i, p in enumerate(snaps):
         d = dates[i]
         seen = set()
-        for r in build(p, 'law', register=(i == cur)):
+        for r in build(p, doctype, register=(i == cur)):
             cid = r['chunk_id']
             seen.add(cid)
             o = opened.get(cid)
@@ -532,10 +537,20 @@ for stem in sorted(set(eff_groups) | mirror_stems):
         # 시행일 기준 스냅샷이 없는 법령 — 종전대로 미러 최신 공포본 1개(시행 전일 수 있다).
         mirror_only.append(stem)
         allrecs.extend(build(os.path.join(LAWS, stem + '.md'), 'law'))
-if os.path.isdir(ADMIN):
-    for fn in sorted(os.listdir(ADMIN)):
-        if fn.endswith('.md'):
-            allrecs.extend(build(os.path.join(ADMIN, fn), 'admin_rule'))
+# 고시도 같은 판본 연쇄(2026-11-21). 판본 폴더에 없는 고시만 미러 최신본 1개로.
+adm_groups = defaultdict(list)
+if os.path.isdir(ADMIN_EFFECTIVE):
+    for p in glob.glob(os.path.join(ADMIN_EFFECTIVE, '*@*.md')):
+        adm_groups[os.path.basename(p).split('@')[0]].append(p)
+admin_stems = ({fn[:-3] for fn in os.listdir(ADMIN) if fn.endswith('.md')}
+               if os.path.isdir(ADMIN) else set())
+admin_mirror_only = []
+for stem in sorted(set(adm_groups) | admin_stems):
+    if stem in adm_groups:
+        allrecs.extend(versioned(adm_groups[stem], 'admin_rule'))
+    else:
+        admin_mirror_only.append(stem)
+        allrecs.extend(build(os.path.join(ADMIN, stem + '.md'), 'admin_rule'))
 
 # 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
 # 법령 별표 = 판본 manifest(시행일 기준) / 고시 별표 = 미러 파싱본 1개(판본 미분리).
@@ -604,6 +619,8 @@ print(f'  현행 중 바뀔 예정인 청크 {len(_closing)}개 · 시행예정�
       f'· 스냅샷 법령 {len(eff_groups)}건')
 if mirror_only:
     print(f'  ⚠️ 시행일 기준 스냅샷 없는 법령 {len(mirror_only)}건 — 미러 최신 공포본 사용(시행 전일 수 있음): {mirror_only[:3]}')
+if admin_mirror_only:
+    print(f'  ⚠️ 판본 폴더에 없는 고시 {len(admin_mirror_only)}건 — 미러 최신본 사용: {admin_mirror_only[:3]}')
 if no_current:
     print(f'  ⛔ 기준일에 시행 중인 스냅샷이 없는 법령 {len(no_current)}건 — _collect_eflaw.py 재실행 필요: {no_current[:3]}')
 print(f'  document_type: {dict(by_dt)}')
