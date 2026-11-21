@@ -13,7 +13,7 @@ mkdir -p "$DST"
 ok=0; fail=0
 while IFS=$'\t' read -r law typ; do
   [ -z "$law" ] && continue
-  if curl -sfL "$BASE/$law/$typ.md" -o "$DST/${law}_${typ}.md"; then
+  if curl -sfL --retry 3 --retry-delay 5 --retry-all-errors "$BASE/$law/$typ.md" -o "$DST/${law}_${typ}.md"; then
     ok=$((ok+1))
   else
     echo "✗ 실패: $law/$typ" >&2; fail=$((fail+1))
