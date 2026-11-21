@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query            # noqa: E402  (.env 로드 포함)
 from _prompt import SYS, SYS_UPCOMING     # noqa: E402
 from _query import expand                 # noqa: E402
+from _verify import check                 # noqa: E402
 
 GEN_MODEL = os.environ.get('GEN_MODEL', 'gemini-3.6-flash')
 GEMINI_EP = 'https://generativelanguage.googleapis.com/v1beta'
@@ -135,6 +136,9 @@ def ask(question, as_of=None):
                      'effective_to': h.get('effective_to'), 'similarity': round(h['similarity'], 3)} for h in hits],
         'upcoming': [{'chunk_id': u['chunk_id'], 'title': disp(u), 'effective_from': u['effective_from']} for u in up],
         'pending': pending(question, hits),
+        # 검증 표시(전문가 보조용 — 막지 않고 경고만). 런타임 verify.ts 와 같은 규칙.
+        'checks': check(answer, [{'similarity': h['similarity'], 'title': disp(h), 'content': h['content']} for h in hits],
+                        [u['content'] for u in up]),
         'usage': {'in': usage.get('promptTokenCount'), 'out': usage.get('candidatesTokenCount')},
     }
 
@@ -161,6 +165,9 @@ def main():
     for it in out['pending']:
         print(f"── 입법 진행 중(확정 아님): {it['title']} — {it['current']} → {it['proposed']} "
               f"· {it['status']} · 시행 목표 {it.get('expected_effective', '미정')} · {it['confidence']}")
+    c = out['checks']
+    print(f"── 검증: 근거 강도 {c['strength']}({c['top']}) · 원문에 없는 수치 {c['unsupportedNumbers'] or '없음'}"
+          f" · 검색 근거에 없는 인용 {c['uncitedRefs'] or '없음'}")
     print(f"── 토큰 입력 {out['usage']['in']} · 출력 {out['usage']['out']}")
 
 
