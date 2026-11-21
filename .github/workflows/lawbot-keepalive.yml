@@ -1,0 +1,27 @@
+name: lawbot DB keep-alive
+
+# Supabase 무료 플랜은 7일간 요청이 없으면 프로젝트를 자동 정지한다.
+# radsafety-lawbot.vercel.app 이 기대는 개발 DB(radsafety-lawbot-dev)가 멈추지 않게
+# 월·목에 가벼운 조회를 보낸다(최대 간격 4일 < 7일). 주간 인입(월요일)과 별개 안전망.
+# 실패(정지·키 오류)하면 워크플로가 실패해 GitHub 알림이 간다.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1,4'   # 월·목 15:00 KST
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping lawbot_chunks
+        env:
+          SUPABASE_URL: ${{ secrets.LAWBOT_SUPABASE_URL }}
+          KEY: ${{ secrets.LAWBOT_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            "${SUPABASE_URL}/rest/v1/lawbot_chunks?select=chunk_id&limit=1" \
+            -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}")
+          echo "HTTP $code"
+          test "$code" = "200"

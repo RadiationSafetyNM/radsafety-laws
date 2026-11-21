@@ -109,6 +109,40 @@ jobs:
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 챗봇 DB 반영(2026-11-22) — 이게 없으면 파일만 새것이고 챗봇은 옛 조문으로 답한다.
+      # 변경분만 임베딩(content_sha 비교)하고, 새 판본으로 대체된 옛 행은 지운다(--prune).
+      # 커밋 여부와 무관하게 매주 돈다 — 지난 주 실패분·손으로 고친 것까지 따라잡는다(멱등).
+      # 대상 = 개발 DB(radsafety-lawbot-dev). 키는 저장소 secrets(LAWBOT_*).
+      - name: Ingest to lawbot DB (변경분 임베딩·옛 판본 정리)
+        id: ingest
+        env:
+          SUPABASE_URL: ${{ secrets.LAWBOT_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.LAWBOT_SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.LAWBOT_GEMINI_API_KEY }}
+        run: |
+          set -o pipefail
+          pip install -q requests numpy pyyaml
+          python3 scripts/_embed_upsert.py --prune 2>&1 | tee /tmp/ingest.log
+          # 사후 확인: 다시 돌리면 할 일이 없어야 한다(인입 누락·옛 판본 잔존 0).
+          python3 scripts/_embed_upsert.py 2>&1 | tee /tmp/ingest2.log
+          grep -q '변경 없음' /tmp/ingest2.log || { echo '::error::인입 후에도 변경분이 남음'; exit 1; }
+          if grep -q '대체된 옛 판본' /tmp/ingest2.log; then echo '::error::옛 판본 행이 남음'; exit 1; fi
+          {
+            echo ''
+            echo '### 챗봇 DB 반영'
+            echo '```'
+            grep -E '기존|인입|삭제|완료|⚠' /tmp/ingest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open issue on ingest failure
+        if: ${{ failure() && steps.ingest.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --title "[챗봇DB] 인입 실패 ($(date -u +%Y-%m-%d))" \
+            --body "주간 작업의 챗봇 DB 반영 단계가 실패했습니다. 챗봇이 옛 조문으로 답할 수 있습니다. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       # 사람에게 도달하는 지점 — GitHub 알림(메일·앱)이 이슈로 온다.
       # 별도 secret 이 필요 없다(GITHUB_TOKEN). 개정이 실제로 있을 때만 연다.
       - name: Open issue on amendment
