@@ -178,12 +178,17 @@ def main():
         d = r['chunk_id'].split('#')[0]
         newest[d] = max(newest.get(d, ''), r['effective_from'])
     superseded = sorted(k for k in stale if newest.get(k[0].split('#')[0], '') > k[1])
+    # 재청킹 고아(2026-11-23) = 같은 문서·같은 시행일 판본이 코퍼스에 그대로 있는데 chunk_id 만
+    # 사라진 행. 파서가 바뀌어 별표 표 분할(_표1행1~11 등)이 재편되면 생긴다 — 판본 철회가 아니라
+    # 같은 판본의 옛 쪼개기라서 남겨 두면 옛 본문이 새 본문과 함께 검색된다. --prune 으로 같이 지운다.
+    present = {(r['chunk_id'].split('#')[0], r['effective_from']) for r in rows}
+    superseded += sorted(k for k in stale if k not in superseded and (k[0].split('#')[0], k[1]) in present)
     other = len(stale) - len(superseded)
     if superseded and not a.limit:
         if a.prune:
             for cid, ef in superseded:
                 delete_row(url, key, cid, ef)
-            print(f'  🗑 대체된 옛 판본 {len(superseded)}행 삭제 (--prune). 예: {superseded[:3]}')
+            print(f'  🗑 대체된 옛 판본·재청킹 고아 {len(superseded)}행 삭제 (--prune). 예: {superseded[:3]}')
         else:
             print(f'  ⚠ 대체된 옛 판본 {len(superseded)}행이 DB 에 남아 함께 현행으로 검색됩니다 — '
                   f'--prune 으로 지우십시오. 예: {superseded[:3]}')

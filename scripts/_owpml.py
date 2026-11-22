@@ -65,6 +65,13 @@ def _owpml_walk(elem, out):
                 t = _owpml_ptext(ch).strip()
                 if t:
                     out.append(t)
+        elif ln == 't':
+            # 표를 품은 문단은 위에서 통째로 재귀하는데, 그 문단의 글(run 안의 t)을 예전엔
+            # 아무 분기도 안 받아 버렸다(2026-11-23 vault hwp 830건 대조에서 발견 — 표 옆
+            # 문단 글·표 앞 제목이 소리 없이 사라짐). 문서 순서대로 글을 남긴다.
+            t = ''.join(ch.itertext()).strip()
+            if t:
+                out.append(t)
         else:
             _owpml_walk(ch, out)
 
