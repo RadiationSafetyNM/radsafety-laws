@@ -30,7 +30,8 @@
   (_collect_attachments_effective.py 산출)의 판본마다 청크를 만들고 그 시행일·종료일을 붙인다.
   고시 본문도 판본을 가른다(2026-11-21) — data/admin-rules-effective/(_collect_admrul_effective.py,
   admrule-kr 커밋 이력)를 법령과 같은 연쇄로 훑는다. 판본 폴더에 없는 고시만 미러 최신본 1개.
-  ⚠️ 고시 별표는 아직 판본을 가르지 않는다(미러 파싱본 1개, effective_to 없음).
+  고시 별표도 판본을 가른다(2026-11-22) — data/attachments-effective/admin-manifest.json
+  (_collect_admrul_attachments_effective.py, 지문 = 첨부파일 flSeq).
 
 사용: python3 scripts/_build_chunks.py [--as-of YYYY-MM-DD] [laws] [admin] [parsed] [out.jsonl]
 """
@@ -553,9 +554,13 @@ for stem in sorted(set(adm_groups) | admin_stems):
         allrecs.extend(build(os.path.join(ADMIN, stem + '.md'), 'admin_rule'))
 
 # 별표 청크는 모법 메타를 상속하므로 반드시 본문 처리 *뒤에* 돈다.
-# 법령 별표 = 판본 manifest(시행일 기준) / 고시 별표 = 미러 파싱본 1개(판본 미분리).
+# 법령 별표 = manifest.json · 고시 별표 = admin-manifest.json (둘 다 시행일 판본). 둘 다 없는 문서만 미러 파싱본.
 MANIFEST = os.path.join(os.path.dirname(PARSED), 'attachments-effective', 'manifest.json')
 att_versions = json.load(open(MANIFEST, encoding='utf-8')) if os.path.exists(MANIFEST) else []
+# 고시 별표 판본(2026-11-22, _collect_admrul_attachments_effective.py) — 같은 행 형식, 같은 처리.
+ADMIN_MANIFEST = os.path.join(os.path.dirname(MANIFEST), 'admin-manifest.json')
+if os.path.exists(ADMIN_MANIFEST):
+    att_versions += json.load(open(ADMIN_MANIFEST, encoding='utf-8'))
 att_stems = {v['stem'] for v in att_versions}
 for v in att_versions:
     for r in build_attachment(os.path.join(ROOT_DIR, v['md']), parent_meta):

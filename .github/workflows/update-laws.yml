@@ -11,6 +11,7 @@ on:
     paths:
       - 'data/laws-effective/**'
       - 'data/attachments-effective/**'
+      - 'data/admin-rules-effective/**'
 
 concurrency:
   group: update-laws
@@ -42,6 +43,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/_collect_admrul_effective.py
+
+      # 고시 별표 시행일 판본(2026-11-22). 미러에 없는 판본은 원본을 받아 파싱해야 하는데
+      # 파싱(LibreOffice)은 CI 에 없다 → 그때는 경고만 남기고 지난 manifest 를 유지한다
+      # (kimbi 일일 수집 scripts/daily_effective.sh 가 도구를 갖고 같은 일을 한다).
+      - name: Admin-rule attachments 시행일 판본
+        continue-on-error: true
+        run: |
+          python3 scripts/_collect_admrul_attachments_effective.py || \
+            echo "::warning::고시 별표 판본 중 파싱이 필요한 것이 있어 manifest 를 갱신하지 못했습니다 — kimbi 일일 수집에서 처리됩니다"
 
       - name: Fetch attachments 별표 (law.go.kr flDownload · 공개)
         run: python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
@@ -103,7 +113,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/laws data/admin-rules data/admin-rules-effective data/attachments \
+          git add data/laws data/admin-rules data/admin-rules-effective data/attachments data/attachments-effective \
                   data/chunks data/attachments-forms-registry.md
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"
