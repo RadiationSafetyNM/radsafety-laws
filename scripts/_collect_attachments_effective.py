@@ -12,22 +12,26 @@
   (2026-11-20 실측: 원자력안전법 시행령 별표 7·9·10 이 11-17 개정 전 판본이었다).
 
 본문은 어디서 오나 — 같은 판본이면 **기존 파싱본을 재사용**한다:
-  미러가 받은 판본과 지문이 같으면 data/attachments-parsed/ 의 md 를 그대로 쓴다. 거기엔
-  수동 hwpx 변환·교정 오버레이(CLAUDE.md §예외 1·2)가 이미 들어 있어서다.
-  지문이 다르면(미러에 없는 판본) 스냅샷의 원본(HWP/HWPX)+PDF 링크로 직접 받아
-  data/attachments-effective/src/<시행일>/ 에 두고 _parse_attachments.py 로 파싱한다.
-  미러 판본의 지문은 법제처 target=law&MST=<미러 MST> 로 한 번 구해 mirror-sha.json 에 둔다
-  (MST 본문은 불변이라 캐시가 영구히 맞다).
+  data/attachments-parsed/ 의 md 가 그 판본임이 **근거 대장**(parsed-provenance.json,
+  {파일 기본이름: 판본 지문})에 적혀 있을 때만 그대로 쓴다. 거기엔 수동 hwpx 변환·교정
+  오버레이(CLAUDE.md §예외 1·2)가 이미 들어 있어서다. 대장에 없거나 지문이 다르면
+  스냅샷의 원본(HWP/HWPX)+PDF 링크로 직접 받아 data/attachments-effective/src/<시행일>/ 에
+  두고 _parse_attachments.py 로 파싱한다.
+  ⚠️ "미러 법령 파일의 MST 와 지문이 같으면 재사용"으로 판정하면 안 된다(2026-11-23 사고):
+  미러 원본 수집(_collect_attachments.py)은 같은 제목 파일이 있으면 다시 받지 않으므로,
+  미러 법령 파일이 새 MST 로 올라가도 attachments-parsed 는 옛 판본에 머문다. 그 상태에서
+  MST 지문만 맞춰 보면 옛 파싱본이 새 판본으로 둔갑한다(원자력안전법 시행령 별표 7·9·
+  10의2·10의3 이 11-17 개정본에서 2025년판으로 되돌아갔다). 대장은 원본을 새로 받아
+  파싱본을 교체했을 때만 손으로 고친다.
 
 범위: 별표만(서식 제외). core 법령은 전량, peripheral 법령은 제목이 방사선 키워드인 것만
 (_collect_attachments.py 와 같은 규칙). 고시 별표는 아직 판본을 가르지 않는다.
 
 산출: data/attachments-effective/manifest.json — _build_chunks.py 가 소비.
 사용: python3 scripts/_collect_attachments_effective.py
-종료 코드: 0 정상 / 2 API·다운로드 실패 / 3 파싱 실패. 전제: 미러 지문 캐시가 없으면 등록 IP.
+종료 코드: 0 정상 / 2 다운로드 실패 / 3 파싱 실패.
 """
-import os, re, sys, json, glob, subprocess, urllib.request, urllib.parse, hashlib
-import xml.etree.ElementTree as ET
+import os, re, sys, json, glob, subprocess, urllib.request
 from urllib.parse import unquote
 from collections import defaultdict
 from _watchlist import members
@@ -36,9 +40,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 EFF = os.path.join(ROOT, 'data', 'laws-effective')
 OUT = os.path.join(ROOT, 'data', 'attachments-effective')
 PARSED = os.path.join(ROOT, 'data', 'attachments-parsed')
-LAWS = os.path.join(ROOT, 'data', 'laws')
-CACHE = os.path.join(OUT, 'mirror-sha.json')
-OC = os.environ.get('MOLEG_OC', 'benkorea.ai')
+PROVENANCE = os.path.join(OUT, 'parsed-provenance.json')
 
 # _collect_attachments.py 와 같은 규칙(그 파일은 import 시 수집을 돌리므로 복사해 둔다)
 RAD = re.compile(r'방사선|방사성|동위원소|선량|피폭|핵종|방사능|진료환자|격리|퇴원|'
@@ -92,31 +94,9 @@ def chains(stem, snaps):
     return out
 
 
-def mirror_mst(stem):
-    p = os.path.join(LAWS, stem + '.md')
-    if not os.path.exists(p):
-        return None
-    m = re.search(r"^법령MST:\s*'?(\d+)", open(p, encoding='utf-8').read(), re.M)
-    return m.group(1) if m else None
-
-
-def mirror_shas(mst, cache):
-    """미러 판본(target=law&MST) 의 별표별 지문. MST 본문은 불변이라 한 번 구하면 끝."""
-    if mst in cache:
-        return cache[mst]
-    url = 'https://www.law.go.kr/DRF/lawService.do?' + urllib.parse.urlencode(
-        dict(OC=OC, target='law', type='XML', MST=mst))
-    root = ET.fromstring(urllib.request.urlopen(url, timeout=60).read())
-    d = {}
-    for u in root.iter('별표단위'):
-        if (u.findtext('별표구분') or '').strip() == '별표':
-            body = re.sub(r'\s+', '', u.findtext('별표내용') or '')
-            d[f"{u.findtext('별표번호').strip()}-{u.findtext('별표가지번호').strip()}"] = \
-                hashlib.sha1(body.encode()).hexdigest()[:16]
-    if not d:
-        raise RuntimeError(f'미러 MST {mst}: 별표 0건 — 응답 이상(등록 IP 확인)')
-    cache[mst] = d
-    return d
+def provenance():
+    """attachments-parsed 의 md 가 어느 판본인지 — {파일 기본이름: 지문}. 없으면 재사용 0."""
+    return json.load(open(PROVENANCE, encoding='utf-8')) if os.path.exists(PROVENANCE) else {}
 
 
 def pick_ext(resp, data):
@@ -148,19 +128,17 @@ def download(url, dst_base, want_pdf):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    cache = json.load(open(CACHE, encoding='utf-8')) if os.path.exists(CACHE) else {}
+    prov = provenance()
     manifest, need_parse = [], set()
     try:
         for stem, snaps in sorted(snapshots().items()):
             vers = chains(stem, snaps)
             if not vers:
                 continue
-            mst = mirror_mst(stem)
-            msha = mirror_shas(mst, cache) if mst else {}
             for v in vers:
                 base = base_name(v['title'], stem)
                 reuse = os.path.join(PARSED, base + '.md')
-                if os.path.exists(reuse) and msha.get(f"{v['no']}-{v['branch']}") == v['sha']:
+                if os.path.exists(reuse) and prov.get(base) == v['sha']:
                     v['md'], v['source'] = os.path.relpath(reuse, ROOT), 'mirror'
                 else:
                     src = os.path.join(OUT, 'src', v['effective_from'])
@@ -175,10 +153,8 @@ def main():
                         need_parse.add(v['effective_from'])
                 manifest.append(v)
     except Exception as ex:
-        json.dump(cache, open(CACHE, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
         print(f'⛔ 수집 실패: {ex}', file=sys.stderr)
         return 2
-    json.dump(cache, open(CACHE, 'w', encoding='utf-8'), ensure_ascii=False, indent=1, sort_keys=True)
 
     for d in sorted(need_parse):
         dst = os.path.join(OUT, 'parsed', d)

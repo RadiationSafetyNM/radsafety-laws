@@ -8,8 +8,9 @@
   생길 뿐(옛 행은 그 날 닫힘) 답은 틀리지 않는다 — 미탐보다 안전한 쪽.
 
 본문은 어디서 오나:
-  · 지문이 미러(data/admin-rules 의 첨부파일 목록)와 같으면 attachments-parsed/ 의 기존 파싱본 재사용
-  · 다르면(= 미러에 없는 판본, 대개 현행본이 미러 최신 발령보다 이른 경우) 파일링크로 원본+PDF 를 받아
+  · attachments-parsed/ 의 md 가 그 판본임이 근거 대장(parsed-provenance.json)에 있으면 재사용
+    (미러 고시 파일의 flSeq 와 맞춰 보면 안 된다 — 법령판 docstring 의 2026-11-23 사고 참조)
+  · 없거나 다르면 파일링크로 원본+PDF 를 받아
     data/attachments-effective/admin/src/<시행일>/ → parsed/<시행일>/ 로 파싱(LibreOffice·pandoc 필요)
 flDownload 는 공개라 IP 무관 — CI 에서도 돈다(단 파싱이 필요한 판본이 생기면 도구 있는 로컬에서).
 
@@ -22,11 +23,10 @@ import glob, json, os, re, subprocess, sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _collect_attachments_effective import base_name, key_str, download   # noqa: E402
+from _collect_attachments_effective import base_name, key_str, download, provenance   # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 EFF = os.environ.get('ADMRUL_EFFECTIVE', os.path.join(ROOT, 'data', 'admin-rules-effective'))
-ADMIN = os.environ.get('ADMIN_MIRROR', os.path.join(ROOT, 'data', 'admin-rules'))
 OUT = os.environ.get('ADMRUL_ATT_OUT', os.path.join(ROOT, 'data', 'attachments-effective'))
 PARSED = os.path.join(ROOT, 'data', 'attachments-parsed')
 FLSEQ = re.compile(r'flSeq=(\d+)')
@@ -80,15 +80,13 @@ def chains(stem, snaps):
 
 
 def main():
-    manifest, need_parse = [], set()
+    manifest, need_parse, prov = [], set(), provenance()
     try:
         for stem, snaps in sorted(snapshots().items()):
-            mp = os.path.join(ADMIN, stem + '.md')
-            msha = {(u['no'], u['branch']): u['sha'] for u in attachments(mp)} if os.path.exists(mp) else {}
             for v in chains(stem, snaps):
                 base = base_name(v['title'], stem)
                 reuse = os.path.join(PARSED, base + '.md')
-                if os.path.exists(reuse) and msha.get((v['no'], v['branch'])) == v['sha']:
+                if os.path.exists(reuse) and prov.get(base) == v['sha']:
                     v['md'], v['source'] = os.path.relpath(reuse, ROOT), 'mirror'
                 else:
                     src = os.path.join(OUT, 'admin', 'src', v['effective_from'])
