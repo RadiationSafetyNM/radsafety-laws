@@ -1,0 +1,10 @@
+[Unit]
+Description=radsafety-laws 법령 시행일 판본 — 매일 07:10 (법제처 공포분 반영 뒤)
+
+[Timer]
+OnCalendar=*-*-* 07:10:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "0 18 * * 0"   # 매주 월요일 03:00 KST (일 18:00 UTC)
   workflow_dispatch: {}     # 수동 실행 버튼
+  # kimbi 일일 수집(scripts/daily_effective.sh)이 법령 판본을 푸시하면 바로 청크·DB 까지 잇는다.
+  # (봇이 GITHUB_TOKEN 으로 푸시한 커밋은 워크플로를 다시 깨우지 않으므로 고리가 생기지 않는다)
+  push:
+    branches: [main]
+    paths:
+      - 'data/laws-effective/**'
+      - 'data/attachments-effective/**'
+
+concurrency:
+  group: update-laws
+  cancel-in-progress: false
 
 permissions:
   contents: write

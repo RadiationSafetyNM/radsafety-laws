@@ -1,0 +1,8 @@
+[Unit]
+Description=radsafety-laws 법령 시행일 판본 일일 수집 (kimbi 전용 — 등록 IP)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/radsafety-laws
+EnvironmentFile=-%h/projects/radsafety-laws/.env
+ExecStart=/bin/bash %h/projects/radsafety-laws/scripts/daily_effective.sh
