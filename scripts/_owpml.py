@@ -13,8 +13,24 @@ def _ln(tag):
     return tag.split('}')[-1]
 
 
+def _eq(script):
+    """수식 개체(hp:equation) → 한컴 수식 스크립트를 그대로 남긴다(2026-11-23).
+    OWPML 은 수식을 글(t)이 아니라 <hp:script> 로 품어서, 글만 모으면 수식이 통째로 사라진다
+    (예: 부담금 산정기준·등급별 최소 방사능의 산식). LaTeX 로 바꾸지 않고 원문 스크립트를
+    표지와 함께 둔다 — 'A over B'·'sum' 등은 LLM 이 읽을 수 있고, 변환 오류의 여지가 없다."""
+    t = re.sub(r'\s+', ' ', (script.text or '').replace('`', ' ')).strip()
+    return f' [수식: {t}] ' if t else ''
+
+
 def _owpml_ptext(p):
-    return ''.join(''.join(t.itertext()) for t in p.iter() if _ln(t.tag) == 't')
+    out = []
+    for e in p.iter():
+        ln = _ln(e.tag)
+        if ln == 't':
+            out.append(''.join(e.itertext()))
+        elif ln == 'script':
+            out.append(_eq(e))
+    return ''.join(out)
 
 
 def _owpml_has_tbl(e):
@@ -39,7 +55,11 @@ def _owpml_cell(tc):
 
 
 def _owpml_table(tbl):
-    rows = ['<table>']
+    # 표 캡션(hp:caption) — tr 만 돌면 캡션 글이 빠진다(2026-11-23 vault 보도자료 실측: 표 제목·
+    # 참여 단체 목록이 캡션에 있었다). 표 바로 앞 문단으로 남긴다.
+    cap = [_owpml_ptext(p).strip() for c in tbl if _ln(c.tag) == 'caption'
+           for p in c.iter() if _ln(p.tag) == 'p']
+    rows = (['\n'.join(x for x in cap if x), ''] if any(cap) else []) + ['<table>']
     for tr in (c for c in tbl if _ln(c.tag) == 'tr'):
         rows.append('<tr>')
         for tc in (c for c in tr if _ln(c.tag) == 'tc'):
@@ -65,6 +85,8 @@ def _owpml_walk(elem, out):
                 t = _owpml_ptext(ch).strip()
                 if t:
                     out.append(t)
+        elif ln == 'script':
+            out.append(_eq(ch).strip())
         elif ln == 't':
             # 표를 품은 문단은 위에서 통째로 재귀하는데, 그 문단의 글(run 안의 t)을 예전엔
             # 아무 분기도 안 받아 버렸다(2026-11-23 vault hwp 830건 대조에서 발견 — 표 옆
