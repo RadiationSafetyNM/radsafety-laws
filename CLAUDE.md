@@ -15,15 +15,14 @@ RadSafety.kr 가족의 **방사선·의료 법령 데이터 repo**. 앱·챗봇�
 
 > 새 데이터를 넣고 싶으면: 먼저 "이게 legalize-kr/admrule-kr/공개 flDownload 로 자동 수집 가능한가?" 를 물어라. 아니면 넣지 말고 vault 쪽(resources)으로 보낸다.
 
-### 예외 — 수동 HWPX override (2026-07-01, 경계된 6건)
+### (폐지) 예외 1 — 수동 HWPX override → hwp2hwpx 자동 변환으로 흡수 (2026-11-23)
 
-law.go.kr 이 일부 별표를 **손실 유발 바이너리 `.hwp`로만** 제공하는데, 이 6건은 오픈소스 변환기(H2Orestart)가 표를 통째로 버린다(원본엔 있음 — PDF·수동확인으로 검증). 유일 해결이 **한컴 한글(정품 엔진)로 `.hwp`→`.hwpx` 수동 변환** 후 그 `.hwpx`를 커밋하는 것. `.hwpx`는 OWPML XML 이라 파서가 무손실 복원한다. 이 `.hwpx`는 공개 소스에서 스크립트로 재현 불가 → **재현성 계약의 문서화된 최소 예외**다. `.hwp`(재현 가능)는 그대로 두고 `.hwpx`를 나란히 커밋(파서가 hwpx 우선). 6건:
+law.go.kr 이 일부 별표를 바이너리 `.hwp` 로만 주는데, LibreOffice+H2Orestart 가 그중 일부의 표를 통째로 버려서(2026-07-01 6건) **한컴 한글로 `.hwp`→`.hwpx` 수동 변환**해 커밋하던 예외가 있었다. 2026-11-23 오픈소스 변환기 **hwp2hwpx**(neolord0, Java, Apache-2.0)로 대체 — `scripts/_hwp2hwpx.py` 가 판본 고정(`PIN`) 체크아웃을 `.vendor/hwp2hwpx/` 에 빌드하고(jar 는 Maven Central sha1 대조), `_parse_attachments.py` 가 **모든 `.hwp` 를 hwpx 로 바꾼 뒤 OWPML 파서(`_owpml.py`)로** 읽는다. H2Orestart 는 변환·파싱 실패 시 폴백으로만 남았다. 파싱본 frontmatter `parse_via: hwp2hwpx | h2orestart` 로 경로가 남는다.
 
-- 방사성핵종별 자체처분 허용농도 · 원자로조종면허 신체검사 합격기준 · 원자로조종면허 신체검사의 방법ㆍ판정기준 · 정도관리항목 · 특수의료장비 설치인정기준 · 품질관리검사기관의 시설 및 검사장비 기준(⚠ PDF 없어 hwpx 가 유일 복구 경로).
-
-> 신규 별표가 같은 증상(파싱 손실 플래그 `pdf_fallback`/`char_diverge`/`short_no_pdf`/`math_loss`)을 보이면 동일하게 처리: 한글로 hwpx 변환 → 커밋 → 이 목록에 추가.
-
-> ⚠️ **일괄 변환은 하지 않는다** (2026-07-31 실측 판단). hwp 라서 깨지는 게 아니다 — 84개 전량 재파싱 결과 손실 플래그 0, 선량한도(시행령 별표1) 같은 핵심 표도 hwp 원본에서 병합셀까지 온전하다. hwp 는 *깨질 때 전멸*하지만 그 자리는 감지기가 지목한다. **플래그가 뜬 건만** 변환하는 게 이 §의 운영 방식이고, 남은 59개 hwp 를 예방적으로 변환하면 노동만 크고 **낡은 수동 hwpx 가 개정된 새 hwp 를 이기는**(파서가 hwpx 우선) 더 나쁜 실패를 부른다.
+- 실측(kimbi): 수동 변환 6건은 한컴 변환본 파싱과 **바이트 동일 6/6**. hwp 만 있던 59건은 글자 동일 55 · 셀 배치 순서만 다름 1 · 목록번호 1자 1 · **더 나음 2**(「방사성핵종의 상대적 위험도에 따른 분류」 — H2Orestart 가 첫 쪽(1군·2군·3군 앞부분)을 통째로 잃고 있었음, PDF 가 없어 감지기도 못 잡은 무증상 손실 / 「특수의료장비의 품질관리검사의 기준」 PDF 대비 누락 어절 1,485 → 501). 나빠진 곳 0.
+- 한컴 변환본 6건은 `ops/hwp2hwpx/golden/` 으로 옮겨 **정답지로만** 쓴다(파이프라인은 안 읽음). **PIN·jar 를 올리면 반드시** `python3 scripts/_hwp2hwpx.py --selftest` (6건 바이트 동일 검사)를 돌린다.
+- 이로써 `data/` 는 다시 전부 스크립트로 재현 가능하다. 별표 파싱은 java 만 있으면 되므로 CI 에서도 돈다.
+- 신규 별표가 손실 플래그(`pdf_fallback`/`char_diverge`/`short_no_pdf`/`math_loss`)를 보이면: 먼저 `parse_via` 확인 → h2orestart 폴백이었으면 hwp2hwpx 실패 원인부터, hwp2hwpx 인데도 손실이면 원본·PDF 대조 후 §예외 2(교정 오버레이) 또는 상류 이슈.
 
 ### 예외 2 — 교정 오버레이 (2026-07-31)
 
@@ -61,7 +60,7 @@ scripts/
   update_admin_rules.sh      # 고시(admrule-kr) + 별표(flDownload) 수집 + 별표 md 파싱 — 수집부는 IP 무관
   _collect_admrul.py         # 고시 수집 (admrule-kr GitHub raw)
   _collect_attachments.py    # 별표 원본(HWP/HWPX)+PDF 수집 (frontmatter 파일링크·PDF링크 → 공개 flDownload)
-  _parse_attachments.py      # 별표 원본 → 구조보존 markdown. hwpx=OWPML XML 직접 파싱(LibreOffice 우회),
+  _parse_attachments.py      # 별표 원본 → 구조보존 markdown. hwp→hwpx(_hwp2hwpx.py)→OWPML 직접 파싱(_owpml.py), 실패 시 H2Orestart 폴백,
                              #   hwp=soffice(+H2Orestart)→docx→pandoc. 도구 없으면 자동 skip(CI 안전).
                              #   손실감지 3층(원본 PDF 대비): 길이 대량손실→PDF폴백(pdf_fallback),
                              #   문자다중집합 divergence(순서·분절 무관, 주 감지)→char_diverge, 숫자집합→num_diverge(가중 오버레이),
@@ -111,7 +110,7 @@ scripts/
 
 - **자동**: `update-laws.yml` 이 매주 월요일 03:00 KST(`cron: "0 18 * * 0"`)에 laws→고시→별표 순으로 수집 → **개정 감지** → **파생물 재생성(청크·서식 레지스트리)** → 변경 있으면 `github-actions[bot]` 이 커밋·푸시. 변경 없으면 커밋 생략.
   - ⚠️ **파생물 재생성은 2026-07-31 에야 CI 에 붙었다.** 그전에는 로컬 수동이라 **7월 내내 청크가 6/30 상태로 방치**됐다(개정된 조문이 `data/laws` 에는 반영되고 청크에는 안 들어감). 서식 레지스트리도 같이 stale 이었다. 순수 파이썬이라 CI 에서 그대로 돈다.
-  - ⚠️ **별표 파싱본(`attachments-parsed/`)만은 CI 에서 못 만든다**(LibreOffice 필요) → 새 별표의 *청크* 는 도구 갖춘 로컬에서 파싱·커밋해야 들어온다. 조문 청크는 완전 자동.
+  - 별표 파싱본(`attachments-parsed/`)도 2026-11-23 부터 CI 에서 만든다(hwp2hwpx = java, OWPML 파싱 = 순수 파이썬 — LibreOffice 불필요). 그전엔 로컬 전용이었다.
     - 그래서 `_build_chunks.py` 가 **별표 원본 ↔ 파싱본 짝 검사**를 하고 빠진 게 있으면 `⛔` 를 찍는다(2026-07-31). CI 가 그 `⛔` 를 개정 이슈에 얹으므로, 새 별표가 파싱 안 된 채 청크에서 누락되는 상황이 조용히 지나가지 않는다 — 로컬 파싱이 필요하다는 알림이 온다.
 - **수동**: `workflow_dispatch` 버튼 또는 로컬에서:
   ```bash
@@ -119,7 +118,7 @@ scripts/
   bash scripts/update_admin_rules.sh           # 고시 + 별표
   ```
 - **IP 무관**: 전 *수집* 경로가 GitHub raw fetch + 공개 flDownload 라 `ubuntu-latest` 에서 그대로 돈다. (구 설계는 법제처 OpenAPI 직접 호출이라 고정 IP·Oracle VM·self-hosted runner 가 필요했으나 **2026-06-13 admrule-kr 피벗(`517bc2b`)으로 전부 폐기**. 관련 메모리: `project_moleg_openapi_requires_fixed_ip`.)
-- **별표 파싱은 로컬 전용(현재)**: `_parse_attachments.py` 는 LibreOffice+H2Orestart+pandoc 필요 → CI(ubuntu-latest)엔 미설치라 자동 skip. 따라서 `attachments-parsed/` 는 도구 갖춘 로컬에서 재생성·커밋한다. (CI 파싱 원하면 workflow 에 tool 설치 스텝 추가 — 향후 과제.)
+- **별표 파싱 (2026-11-23~ CI 포함)**: `_parse_attachments.py` 주 경로 = hwp2hwpx(java)+OWPML(순수 파이썬) → CI(ubuntu-latest, JDK·poppler 설치 스텝)에서 매주 돈다. LibreOffice+H2Orestart+pandoc 은 폴백 전용(CI 엔 없음 — 폴백이 필요한 건은 실패로 남고 지난 파싱본 유지, kimbi 에서 처리).
 - **1차 출처**: 국가법령정보센터(law.go.kr) OpenAPI → legalize-kr/admrule-kr 가공(markdown+frontmatter) → 본 repo raw fetch. raw fetch 라 legalize-kr 의 force-push·history rewrite 에 면역(항상 main 최신).
 
 ---

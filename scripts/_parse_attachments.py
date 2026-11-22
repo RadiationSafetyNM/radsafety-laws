@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """별표 원본(HWP/HWPX) → 구조보존 markdown 파싱.
 
-파이프라인 산출물(재현 가능) — 수동 변환 금지. 경로:
-  hwp/hwpx --[LibreOffice + H2Orestart]--> docx --[pandoc docx리더]--> gfm markdown(표 보존)
+파이프라인 산출물(재현 가능) — 수동 변환 금지. 경로 (2026-11-23 개정):
+  hwpx            --[OWPML 직접 파싱(_owpml.py)]--> markdown(표는 HTML)
+  hwp  --[hwp2hwpx(_hwp2hwpx.py, Java)]--> hwpx --> 위와 같음        ← 주 경로
+  hwp  --[LibreOffice + H2Orestart]--> docx --[pandoc]--> gfm        ← 변환·파싱 실패 시 폴백만
+  (구 주 경로였던 H2Orestart 는 일부 별표의 표를 통째로 버렸다 — _hwp2hwpx.py docstring 실측 참조.)
   (html 경로는 span lang 노이즈로 ~27배 부풀어 폐기 — docx 리더가 깨끗함.)
   병합셀 표는 gfm 파이프로 표현 불가 → clean HTML <table> 로 보존(LLM 판독 가능).
 
 대상 = **별표만**(실체 규칙 표). 서식·별지는 빈 양식이라 본문 파싱 안 함(메타 레지스트리 별도).
 원본 우선(파일링크). 별표는 원본 100% 존재하므로 PDF 빠진 별표(≈16)도 여기서 커버.
 
-전제: LibreOffice(soffice) + H2Orestart 확장 설치(사용자 프로필). pandoc 설치.
+전제: java(hwp2hwpx). 폴백용으로 LibreOffice(soffice)+H2Orestart·pandoc 가 있으면 더 좋다.
 사용: python3 scripts/_parse_attachments.py [attachments폴더] [출력폴더]
 """
 import sys, os, re, json, subprocess, tempfile, shutil, zipfile
@@ -22,11 +25,12 @@ CORR = os.path.join(os.path.dirname(SRC) or '.', 'attachments-corrections.json')
 
 ORIG_EXT = ('.hwpx', '.hwp')   # hwpx 우선(개방포맷)
 
-# 도구 가드 — soffice(+H2Orestart)·pandoc 미설치 환경(예: CI ubuntu-latest)에선
-# 수집 파이프라인을 깨지 않도록 조용히 skip. 파싱은 도구 갖춘 환경에서 재실행.
-_missing = [t for t in ('soffice', 'pandoc') if not shutil.which(t)]
-if _missing:
-    print(f'[parse skip] {" ".join(_missing)} 미설치 → 별표 파싱 생략 '
+# 도구 가드 — 주 경로는 java(hwp2hwpx)+순수 파이썬. soffice·pandoc 는 폴백 전용.
+# 둘 다 없으면(예: 도구 없는 환경) 수집 파이프라인을 깨지 않도록 조용히 skip.
+HAS_JAVA = shutil.which('java') is not None
+HAS_LO = all(shutil.which(t) for t in ('soffice', 'pandoc'))
+if not HAS_JAVA and not HAS_LO:
+    print('[parse skip] java·soffice/pandoc 모두 없음 → 별표 파싱 생략 '
           '(수집은 정상, 파싱은 도구 환경에서 재실행)')
     sys.exit(0)
 
@@ -142,82 +146,8 @@ def apply_corrections(body, rules):
     return body, 'corrected'
 
 
-# ── OWPML(hwpx) 직접 파싱 — LibreOffice 우회(H2Orestart 가 표를 버리는 문제 근본 해결) ──
-# hwpx = OWPML(개방형 XML) zip. Contents/section*.xml 을 직접 파싱해 문단+표(HTML) 복원.
-def _ln(tag):
-    return tag.split('}')[-1]
-
-
-def _owpml_ptext(p):
-    return ''.join(''.join(t.itertext()) for t in p.iter() if _ln(t.tag) == 't')
-
-
-def _owpml_has_tbl(e):
-    return any(_ln(d.tag) == 'tbl' for d in e.iter())
-
-
-def _owpml_cell(tc):
-    sub = next((c for c in tc if _ln(c.tag) == 'subList'), None)
-    if sub is None:
-        return ''
-    out = []
-    for p in sub:
-        if _ln(p.tag) != 'p':
-            continue
-        if _owpml_has_tbl(p):
-            _owpml_walk(p, out)              # 중첩 표는 HTML 그대로(개행 유지)
-        else:
-            t = _owpml_ptext(p).strip()
-            if t:
-                out.append(t)
-    return '\n'.join(out)
-
-
-def _owpml_table(tbl):
-    rows = ['<table>']
-    for tr in (c for c in tbl if _ln(c.tag) == 'tr'):
-        rows.append('<tr>')
-        for tc in (c for c in tr if _ln(c.tag) == 'tc'):
-            span = next((c for c in tc if _ln(c.tag) == 'cellSpan'), None)
-            cs = int(span.get('colSpan', '1')) if span is not None else 1
-            rs = int(span.get('rowSpan', '1')) if span is not None else 1
-            a = (f' colspan="{cs}"' if cs > 1 else '') + (f' rowspan="{rs}"' if rs > 1 else '')
-            rows.append(f'<td{a}>{_owpml_cell(tc)}</td>')
-        rows.append('</tr>')
-    rows.append('</table>')
-    return '\n'.join(rows)
-
-
-def _owpml_walk(elem, out):
-    for ch in elem:
-        ln = _ln(ch.tag)
-        if ln == 'tbl':
-            out.append(_owpml_table(ch))
-        elif ln == 'p':
-            if _owpml_has_tbl(ch):
-                _owpml_walk(ch, out)
-            else:
-                t = _owpml_ptext(ch).strip()
-                if t:
-                    out.append(t)
-        else:
-            _owpml_walk(ch, out)
-
-
-def parse_hwpx(path):
-    """hwpx → 문단+표(HTML) markdown. 실패 시 '' (호출부가 폴백)."""
-    try:
-        with zipfile.ZipFile(path) as z:
-            secs = sorted(n for n in z.namelist()
-                          if re.match(r'Contents/section\d+\.xml', n))
-            out = []
-            for n in secs:
-                _owpml_walk(ET.fromstring(z.read(n)), out)
-        return re.sub(r'\n{3,}', '\n\n', '\n\n'.join(out)).strip()
-    except Exception as e:
-        print(f'  ? OWPML 파싱 실패({e}) → docx 폴백: {os.path.basename(path)[:40]}',
-              file=sys.stderr)
-        return ''
+from _owpml import parse_hwpx   # noqa: E402  (OWPML 파서 — 별도 모듈)
+import _hwp2hwpx                 # noqa: E402  (hwp → hwpx 자동 변환)
 
 
 # 별표 원본 수집(hwpx 우선, 같은 stem 은 하나만)
@@ -242,11 +172,19 @@ if not srcfiles:
 os.makedirs(DST, exist_ok=True)
 tmp = tempfile.mkdtemp(prefix='hwpparse_')
 try:
-    # 1) 배치 docx 변환 — **hwp(바이너리)만** soffice 로. hwpx 는 OWPML 직접 파싱(2단계).
+    # 1) hwp → hwpx 자동 변환(hwp2hwpx). 실패분·java 없음만 soffice 배치 docx 로 폴백.
     hwp_srcs = [p for p in srcfiles if p.lower().endswith('.hwp')]
-    if hwp_srcs:
+    conv = {}
+    if hwp_srcs and HAS_JAVA:
+        try:
+            conv = _hwp2hwpx.convert([(p, os.path.join(tmp, os.path.basename(p)[:-4] + '.hwpx'))
+                                      for p in hwp_srcs])
+        except Exception as e:
+            print(f'  ? hwp2hwpx 사용 불가({e}) → H2Orestart 폴백', file=sys.stderr)
+    lo_srcs = [p for p in hwp_srcs if p not in conv]
+    if lo_srcs and HAS_LO:
         subprocess.run(
-            ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + hwp_srcs,
+            ['soffice', '--headless', '--convert-to', 'docx', '--outdir', tmp] + lo_srcs,
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
 
     ok, fail, no_table, recovered, flagged, diverged = 0, [], [], [], [], []
@@ -257,16 +195,21 @@ try:
         srcfn = byname[stem]
         out = os.path.join(DST, stem + '.md')
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
-        # 2) 본문 추출 — hwpx: OWPML 직접(LibreOffice 우회) / hwp: docx→pandoc
+        # 2) 본문 추출 — hwpx: OWPML 직접 / hwp: hwp2hwpx 변환본을 OWPML 로 / 실패 시 docx→pandoc
+        srcpath = os.path.join(SRC, srcfn)
+        via = ''
         if ext == 'hwpx':
-            body = parse_hwpx(os.path.join(SRC, srcfn))
-            if not body:                       # OWPML 실패 시 docx 폴백 시도
-                subprocess.run(['soffice', '--headless', '--convert-to', 'docx',
-                                '--outdir', tmp, os.path.join(SRC, srcfn)],
-                               check=False, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=300)
+            body = parse_hwpx(srcpath)
+        elif srcpath in conv:
+            body = parse_hwpx(conv[srcpath])
+            via = 'hwp2hwpx' if body else ''
         else:
             body = ''
+        if not body and HAS_LO and not os.path.exists(os.path.join(tmp, stem + '.docx')):
+            subprocess.run(['soffice', '--headless', '--convert-to', 'docx',
+                            '--outdir', tmp, srcpath],
+                           check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=300)
         if not body:
             docx = os.path.join(tmp, stem + '.docx')
             if not os.path.exists(docx) or os.path.getsize(docx) < 200:
@@ -276,6 +219,7 @@ try:
                 ['pandoc', '-f', 'docx', '-t', 'gfm', '--wrap=none', docx],
                 capture_output=True, text=True).stdout
             body = clean_md(raw)
+            via = 'h2orestart'
         # 2.5) 교정 오버레이 — 감지 *전*에 적용해야 교정된 자리가 재차 플래그되지 않는다.
         body, cnote = apply_corrections(body, corrections.get(stem, {}).get('rules'))
         if cnote == 'corrected':
@@ -323,6 +267,8 @@ try:
         ext = os.path.splitext(srcfn)[1].lstrip('.').lower()
         fmt[ext] += 1
         note_line = f'parse_note: {note}\n' if note else ''
+        if via:
+            note_line += f'parse_via: {via}\n'
         fm = (f'---\ntype: 별표\ntitle: "{title}"\nparent_law: "{parent}"\n'
               f'delegating_articles: {yaml_list(arts)}\n'
               f'source: "{srcfn}"\nsource_format: {ext}\n{note_line}---\n\n')

@@ -44,9 +44,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/_collect_admrul_effective.py
 
-      # 고시 별표 시행일 판본(2026-11-22). 미러에 없는 판본은 원본을 받아 파싱해야 하는데
-      # 파싱(LibreOffice)은 CI 에 없다 → 그때는 경고만 남기고 지난 manifest 를 유지한다
-      # (kimbi 일일 수집 scripts/daily_effective.sh 가 도구를 갖고 같은 일을 한다).
+      # 별표 파싱 도구 — hwp2hwpx(java, 판본 고정 빌드는 _hwp2hwpx.py) + pdftotext(손실 감지).
+      # 2026-11-23 부터 LibreOffice 없이 CI 에서 별표를 파싱한다.
+      - name: Setup parse tools (JDK · poppler)
+        run: |
+          sudo apt-get install -y -qq poppler-utils >/dev/null
+          java -version 2>&1 | head -1
+
+      # 고시 별표 시행일 판본(2026-11-22). 미러에 없는 판본은 원본을 받아 파싱한다(hwp2hwpx).
+      # 그래도 실패하면 경고만 남기고 지난 manifest 를 유지한다(kimbi 일일 수집이 같은 일을 한다).
       - name: Admin-rule attachments 시행일 판본
         continue-on-error: true
         run: |
@@ -55,6 +61,10 @@ jobs:
 
       - name: Fetch attachments 별표 (law.go.kr flDownload · 공개)
         run: python3 scripts/_collect_attachments.py data/laws data/admin-rules data/attachments
+
+      # 새 별표도 그 주에 청크까지 — 전에는 LibreOffice 가 없어 로컬 파싱·커밋을 기다렸다.
+      - name: Parse attachments 별표 (hwp2hwpx → OWPML)
+        run: python3 scripts/_parse_attachments.py data/attachments data/attachments-parsed
 
       # 커밋 *전에* 돈다 — 워킹트리(새로 받은 것) ↔ HEAD(지난주) 비교.
       # 파일 diff 가 아니라 frontmatter 법령MST 변경분만 골라 조문 단위로 푼다.
@@ -77,8 +87,7 @@ jobs:
       # 파생물 재생성 — 이게 없으면 data/ 는 갱신되는데 청크만 옛 조문에 머문다.
       # 실제로 7월 내내 청크가 6/30 상태로 방치됐고(재생성이 로컬 수동이었다), 고시 청크는
       # 미러 형식 변경(07-05)으로 3주 넘게 stale 이었다. 순수 파이썬이라 CI 에서 그대로 돈다.
-      # ⚠️ 별표 파싱본(attachments-parsed)만은 LibreOffice 가 필요해 여기서 못 만든다 —
-      #    새 별표의 *청크* 는 도구 갖춘 로컬에서 파싱 후 커밋해야 들어온다.
+      # 별표 파싱본은 위 'Parse attachments' 단계가 만든다(2026-11-23~, 그전엔 로컬 전용).
       - name: Rebuild derived data (chunks · forms registry)
         id: rebuild
         run: |
@@ -113,7 +122,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/laws data/admin-rules data/admin-rules-effective data/attachments data/attachments-effective \
+          git add data/laws data/admin-rules data/admin-rules-effective data/attachments data/attachments-effective data/attachments-parsed \
                   data/chunks data/attachments-forms-registry.md
           if git diff --cached --quiet; then
             echo "변경 없음 — 커밋 생략"
