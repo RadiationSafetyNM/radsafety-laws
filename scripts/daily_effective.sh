@@ -1,5 +1,6 @@
 #!/bin/bash
-# 법령 시행일 판본 일일 수집 — kimbi 전용(법제처 API 등록 IP 필요). 2026-11-22 신설.
+# 법령 시행일 판본 일일 수집 — 법제처 API 등록 IP 가 있는 머신 한 대에서만(지금 kimbi, Oracle VM 이 생기면
+# ops/oracle-vm/README.md 절차로 이전). 2026-11-22 신설.
 #
 # 흐름: git pull → _collect_eflaw.py(새 스냅샷만) → _collect_attachments_effective.py(별표 판본,
 #       LibreOffice 파싱) → 고시 판본·고시 별표 판본 → 바뀐 게 있으면 커밋·푸시 → GitHub Actions(update-laws.yml)가 push 로
@@ -28,7 +29,7 @@ if git diff --cached --quiet; then
     exit $(( rc1 | rc2 ))
 fi
 n=$(git diff --cached --name-only | grep -c '@')
-git commit -q -m "chore: 법령 시행일 판본 수집 $(date +%F) (kimbi 일일, 변경 ${n}건)" \
+git commit -q -m "chore: 법령 시행일 판본 수집 $(date +%F) ($(hostname -s) 일일, 변경 ${n}건)" \
     -m "scripts/daily_effective.sh — push 로 update-laws.yml 이 청크 재생성·DB 인입을 이어 한다."
 # ssh push 가 끝나 놓고도 안 끝나는 일이 있어 timeout 후 원격 HEAD 로 판정한다
 timeout 90 git push -q origin HEAD:main
