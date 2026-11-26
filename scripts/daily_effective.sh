@@ -1,6 +1,6 @@
 #!/bin/bash
-# 법령 시행일 판본 일일 수집 — 법제처 API 등록 IP 가 있는 머신 한 대에서만(지금 kimbi, Oracle VM 이 생기면
-# ops/oracle-vm/README.md 절차로 이전). 2026-11-22 신설.
+# 법령 시행일 판본 일일 수집 — 법제처 API 등록 IP 가 있는 머신 한 대에서만(2026-11-26 부터 AWS 서버
+# radsafety-sydney, 그 전에는 kimbi. 이전 절차 ops/oracle-vm/README.md). 2026-11-22 신설.
 #
 # 흐름: git pull → _collect_eflaw.py(새 스냅샷만) → _collect_attachments_effective.py(별표 판본,
 #       LibreOffice 파싱) → 고시 판본·고시 별표 판본 → 바뀐 게 있으면 커밋·푸시 → GitHub Actions(update-laws.yml)가 push 로

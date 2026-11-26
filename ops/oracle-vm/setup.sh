@@ -1,5 +1,5 @@
 #!/bin/bash
-# Oracle 무료 VM(radsafety-osaka, Ubuntu 24.04 aarch64) 세팅 — 법령 시행일 판본 일일 수집을 kimbi 에서 옮긴다.
+# 수집 서버 세팅 (2026-11-26 부터 AWS Lightsail radsafety-sydney, Ubuntu 24.04 x86_64. 원래 Oracle 무료 VM 용으로 썼고 그대로 맞았다) — 법령 시행일 판본 일일 수집을 kimbi 에서 옮긴다.
 #
 # 왜 이 VM 인가: 법제처 eflaw API 는 등록한 IP 에서만 응답한다. 집 PC(kimbi)는 꺼질 수 있고 IP 가 바뀐다.
 # 방식: GitHub self-hosted runner 를 두지 않는다. kimbi 와 똑같이 systemd 타이머가 scripts/daily_effective.sh 를
@@ -33,7 +33,7 @@ base() {
 
 key() {
     mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -f "$KEY" -C "radsafety-osaka-deploy" -N ''
+    [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -f "$KEY" -C "radsafety-sydney-deploy" -N ''
     grep -q 'Host github-radsafety-laws' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<CFG
 Host github-radsafety-laws
     HostName github.com
@@ -52,8 +52,8 @@ clone() {
     mkdir -p "$(dirname "$DIR")"
     [ -d "$DIR/.git" ] || git clone -q "$REPO" "$DIR"
     cd "$DIR"
-    git config user.name  "radsafety-osaka"
-    git config user.email "radsafety-osaka@users.noreply.github.com"
+    git config user.name  "radsafety-sydney"
+    git config user.email "radsafety-sydney@users.noreply.github.com"
     python3 scripts/_hwp2hwpx.py >/dev/null && echo "✅ hwp2hwpx 빌드"
     python3 scripts/_hwp2hwpx.py --selftest | tail -1
     [ -f .env ] || { printf 'MOLEG_OC=benkorea.ai\n# GITHUB_TOKEN=   (선택 — 고시 수집의 GitHub API 한도 완화. 공개 저장소 읽기 전용 토큰)\n' > .env; chmod 600 .env; }

@@ -1,4 +1,16 @@
-# Oracle 무료 VM 으로 일일 수집 옮기기
+# 일일 수집 서버 (2026-11-26 부터 AWS Lightsail `radsafety-sydney`)
+
+> **현재 상태 (2026-11-26)**: Oracle 무료 A1 은 오사카에 자리가 나지 않아(재시도 898회) 쓰지 않는다.
+> 대신 **AWS Lightsail `radsafety-sydney`**(시드니, Ubuntu 24.04 x86_64, 1GB, 고정 IP `16.176.80.159`)에
+> 이 폴더의 `setup.sh` 를 그대로 써서 옮겼다(base → key → clone → check → timer, 전부 통과).
+> kimbi 의 `radsafety-effective.timer` 는 껐다. 법제처에는 kimbi IP 와 서버 IP 가 둘 다 등록돼 있다(되돌리기용).
+>
+> - 접속: `ssh -i ~/.ssh/oci_radsafety ubuntu@16.176.80.159` (kimbi 의 키. ai4lt 키는 아직 서버에 없다)
+> - 법제처 IP 추가 위치: open.law.go.kr → OPEN API → OPEN API 신청 (마이페이지의 API인증키관리가 아니다)
+> - 저장소 deploy key 는 조직 설정(Member privileges → Deploy keys)을 켜야 등록할 수 있다
+> - 시드니인 이유: 새 AWS 계정은 시드니 리전만 열려 있다. 해외 IP 에서도 법제처 API 는 응답한다(실측)
+> - 아래 본문은 Oracle 기준으로 쓴 원래 절차다. 1번(예약 IP)만 Lightsail 의 "고정 IP 연결"로 바뀌고 나머지는 같다
+
 
 법령 시행일 판본 일일 수집(`scripts/daily_effective.sh`)을 kimbi 에서 Oracle 무료 VM `radsafety-osaka` 로 옮기는 절차.
 2026-11-23 작성 — VM 이 생기기 전에 미리 준비한 것이라 **VM 에서 아직 돌려 보지 않았다.**

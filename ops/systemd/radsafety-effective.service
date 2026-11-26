@@ -1,5 +1,5 @@
 [Unit]
-Description=radsafety-laws 법령 시행일 판본 일일 수집 (kimbi 전용 — 등록 IP)
+Description=radsafety-laws 법령 시행일 판본 일일 수집 (등록 IP 머신 한 대 — 2026-11-26 부터 radsafety-sydney)
 
 [Service]
 Type=oneshot
