@@ -257,15 +257,15 @@ count: 242
 
 | 구분 | 번호 | 제목 | 근거조 | 원본 | PDF |
 |---|---|---|---|---|---|
-| 별지 | 1 | 안전관리책임자 교육기관(지정신청서, 변경신청서) |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674615) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674619) |
-| 별지 | 2 | 안전관리책임자 교육기관 지정 심사 평가표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674621) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674625) |
-| 별지 | 3 | 안전관리책임자 교육기관 지정 심사 결과보고서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674627) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674631) |
-| 별지 | 4 | 안전관리책임자 교육기관 지정서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674633) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674639) |
-| 별지 | 5 | 안전관리책임자(선임교육, 보수교육) 신청서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674641) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674645) |
-| 별지 | 6 | 수료증 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674647) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674651) |
-| 별지 | 7 | 안전관리책임자 교육 이수현황 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674653) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674657) |
-| 별지 | 8 | 교육기관 운영실태 점검표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674659) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674669) |
-| 별지 | 9 | 안전관리책임자 교육기관 지정심사 세부 평가표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674671) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=171674675) |
+| 별지 | 1 | 안전관리책임자 교육기관(지정신청서, 변경신청서) |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196823) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196827) |
+| 별지 | 2 | 안전관리책임자 교육기관 지정 심사 평가표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196829) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196873) |
+| 별지 | 3 | 안전관리책임자 교육기관 지정 심사 결과보고서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196875) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196879) |
+| 별지 | 4 | 안전관리책임자 교육기관 지정서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196881) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196887) |
+| 별지 | 5 | 안전관리책임자(선임교육, 보수교육) 신청서 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196889) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196893) |
+| 별지 | 6 | 수료증 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196895) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196899) |
+| 별지 | 7 | 안전관리책임자 교육 이수현황 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196901) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196905) |
+| 별지 | 8 | 교육기관 운영실태 점검표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196907) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196917) |
+| 별지 | 9 | 안전관리책임자 교육기관 지정심사 세부 평가표 |  | [원본](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196919) | [PDF](https://www.law.go.kr/LSW/flDownload.do?flSeq=134196923) |
 
 ## 진단용방사선발생장치의안전관리에관한규칙_보건복지부령
 
