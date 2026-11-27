@@ -1,0 +1,30 @@
+{
+ "items": [
+  {
+   "id": "35197",
+   "name": "방사성폐기물 폐기시설 품질보증기준에 관한 고시",
+   "agency": "원자력안전위원회",
+   "type": "고시",
+   "action": "일부개정",
+   "issued": "2026-11-19",
+   "serial": "2100000288396",
+   "why": "제목 낱말",
+   "link": "https://www.law.go.kr/admRulLsInfoP.do?admRulSeq=2100000288396",
+   "first_seen": "2026-11-28",
+   "status": "new"
+  },
+  {
+   "id": "35210",
+   "name": "중·저준위 방사성폐기물 운송선박의 방사선안전관리 등 기술기준에 관한 고시",
+   "agency": "원자력안전위원회",
+   "type": "고시",
+   "action": "일부개정",
+   "issued": "2026-11-19",
+   "serial": "2100000288360",
+   "why": "제목 낱말",
+   "link": "https://www.law.go.kr/admRulLsInfoP.do?admRulSeq=2100000288360",
+   "first_seen": "2026-11-28",
+   "status": "new"
+  }
+ ]
+}
