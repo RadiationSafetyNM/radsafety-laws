@@ -82,7 +82,7 @@ def kdate(d):
 
 def _kst_today():
     import datetime
-    return (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).date().isoformat()
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date().isoformat()
 
 
 def qvec(question):
@@ -251,7 +251,7 @@ def main():
         for s_ in g['sources']:
             print(f"  {s_['similarity']:.3f} {s_['title']}")
         for c_ in g['changed']:
-            print(f"  ⚠ 지침 발간 뒤 변경: {c_['cite']}" + (f" 개정 {c_['amended']}" if c_['amended'] else '') + (f" · {c_['upcoming']} 변경 예정" if c_['upcoming'] else ''))
+            print(f"  ⚠ 지침 발간 뒤 변경: {c_['cite']}" + (' 현행 법령에 없음(삭제·이동)' if c_.get('gone') else '') + (f" 개정 {c_['amended']}" if c_['amended'] else '') + (f" · {c_['upcoming']} 변경 예정" if c_['upcoming'] else ''))
     c = out['checks']
     print(f"── 검증: 근거 강도 {c['strength']}({c['top']}) · 원문에 없는 수치 {c['unsupportedNumbers'] or '없음'}"
           f" · 검색 근거에 없는 인용 {c['uncitedRefs'] or '없음'}")

@@ -77,7 +77,11 @@ def law_status(today):
 
 def main():
     import datetime
-    status, known = law_status(str(datetime.date.today()))
+    # 한국 날짜 기준(CI 는 UTC 로 돈다 — 시행일 0시 경계에서 하루 어긋나지 않게)
+    kst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date().isoformat()
+    today = next((a.split('=', 1)[1] for a in sys.argv if a.startswith('--today=')), kst)   # --today 는 시험용
+    out_path = next((a.split('=', 1)[1] for a in sys.argv if a.startswith('--out=')), OUT)
+    status, known = law_status(today)
     unknown = set()
     chunks, cur = [], None
     path = {'part': '', 'chap': '', 'sec': '', 'sub': '', 'sub2': ''}
@@ -148,7 +152,8 @@ def main():
         for c_ in cs:
             law, art = c_.rsplit(' ', 1)
             if (law, art) not in known:
-                unknown.add(c_)
+                unknown.add(c_)      # 현행 법령에 그 조가 없다 — 삭제·이동. 가장 큰 변경이라 표시에 넣는다
+                changed.append({'cite': c_, 'amended': None, 'upcoming': None, 'gone': True})
             elif (law, art) in status:
                 changed.append({'cite': c_, **status[(law, art)]})
         printed = f"{c['pages'][0] - 6}" + (f"~{c['pages'][-1] - 6}" if len(c['pages']) > 1 else '')
@@ -162,13 +167,15 @@ def main():
     ids = [r['chunk_id'] for r in rows]
     if len(ids) != len(set(ids)):
         sys.exit('chunk_id 중복 — 산출하지 않음')
-    with open(OUT, 'w', encoding='utf-8') as f:
+    with open(out_path, 'w', encoding='utf-8') as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + '\n')
     src = sum(len(re.sub(r'\s', '', open(x, encoding='utf-8').read())) for x in glob.glob(f'{PAGES}/p*.md'))
     out = sum(len(re.sub(r'\s', '', ''.join(c['lines']))) for c in merged)
     print(f'청크 {len(rows)} · 본문 {out:,}자(공백 제외) / 전사본 전체 {src:,}자 · 최장 {max(len(r["content"]) for r in rows)} · 최단 {min(len(r["content"]) for r in rows)}')
-    print(f'인용 조문 중 발간(2022-10) 뒤 개정·변경예정이 있는 청크 {sum(bool(r["metadata"]["cites_changed"]) for r in rows)} · 현행 법령에서 못 찾은 인용 {sorted(unknown)}')
+    print(f'인용 조문 중 발간(2022-10) 뒤 개정·변경예정이 있는 청크 {sum(bool(r["metadata"]["cites_changed"]) for r in rows)} · 현행 법령에서 못 찾은 인용(삭제·이동) {sorted(unknown)}')
+    if unknown and os.environ.get('GITHUB_ACTIONS'):
+        print(f'::warning::수검 가이드가 인용한 조문이 현행 법령에 없습니다: {sorted(unknown)}')
     if '-v' in sys.argv:
         for r in rows:
             print(f"{len(r['content']):5d} {r['chunk_id']}  cites={len(r['metadata']['cites'])}")

@@ -12,6 +12,7 @@ on:
       - 'data/laws-effective/**'
       - 'data/attachments-effective/**'
       - 'data/admin-rules-effective/**'
+      - 'data/guides/**'          # 수검 가이드 전사본을 고치면 청크·DB 까지
 
 concurrency:
   group: update-laws
@@ -94,6 +95,9 @@ jobs:
           python3 scripts/_build_forms_registry.py \
                   data/laws data/admin-rules data/attachments data/attachments-forms-registry.md
           python3 scripts/_build_chunks.py 2>&1 | tee /tmp/chunks.log
+          # 수검 가이드 청크(2026-11-27) — 본문은 그대로여도 '인용 조문이 발간 뒤 바뀌었는가'(cites_changed)는
+          # 법령 청크에서 다시 계산된다. 법령이 개정되거나 시행예정이 시행되는 날 값이 달라진다.
+          python3 scripts/_build_guide_chunks.py 2>&1 | tee /tmp/guide.log
           {
             echo ''
             echo '### 청크 재생성'
@@ -157,11 +161,16 @@ jobs:
           python3 scripts/_embed_upsert.py 2>&1 | tee /tmp/ingest2.log
           grep -q '변경 없음' /tmp/ingest2.log || { echo '::error::인입 후에도 변경분이 남음'; exit 1; }
           if grep -q '대체된 옛 판본' /tmp/ingest2.log; then echo '::error::옛 판본 행이 남음'; exit 1; fi
+          # 수검 가이드(lawbot_guide_chunks) — 바뀐 행만 다시 넣는다. 다시 돌려 할 일이 없어야 한다.
+          python3 scripts/_embed_upsert_guide.py 2>&1 | tee /tmp/guide_ingest.log
+          python3 scripts/_embed_upsert_guide.py 2>&1 | tee /tmp/guide_ingest2.log
+          grep -q '새로 넣거나 바뀐 것 0 · 파일에 없어 지울 것 0' /tmp/guide_ingest2.log || { echo '::error::수검 가이드 인입 후에도 변경분이 남음'; exit 1; }
           {
             echo ''
             echo '### 챗봇 DB 반영'
             echo '```'
             grep -E '기존|인입|삭제|완료|⚠' /tmp/ingest.log
+            grep -E 'DB|완료' /tmp/guide_ingest.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
