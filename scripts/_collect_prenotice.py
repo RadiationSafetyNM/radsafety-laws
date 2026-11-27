@@ -26,12 +26,15 @@ BASE = 'https://opinion.lawmaking.go.kr/rest'
 OC = os.environ.get('LAWMAKING_OC', 'kimbi.kirams')
 KW = re.compile(r'방사선|방사성|방사능|원자력|동위원소|선량|핵의학|진단용|특수의료장비|피폭|엑스선|핵연료|원자로')
 # 의료·RI 이용과 거리가 먼 주제(원자로·핵연료·기관 운영 등). upcoming 화면에서 접어 둔다.
-OTHER = re.compile(r'원자로|핵연료|발전용|부담금|방재|비상대책|해체|핵물질|직제|운송선박|진흥|소형모듈|사용후|규제지침|회의 운영|정보공유|환경영향평가|통제|손해배상|생활주변')
+OTHER = re.compile(r'원자로|핵연료|발전용|부담금|방재|비상대책|해체|핵물질|직제|운송선박|진흥|소형모듈|사용후|규제지침|회의 운영|정보공유|환경영향평가|통제|손해배상|생활주변|연구개발사업|재난관리|결핵')
 SEEN = f'{ROOT}/data/prenotice-seen.json'
 AGENCIES = ('원자력안전위원회', '보건복지부', '식품의약품안전처', '질병관리청')
 # 본문 판정은 제목보다 좁게 — '원자력'·'선량' 같은 낱말은 남의 분야 공고문에도 스친다
 KW_BODY = re.compile(r'방사선|방사성|방사능|동위원소|핵의학|특수의료장비|피폭|엑스선')
 SUM_MAX = 1500
+# 본문으로 보는 '의료·RI 이용 밖' — 원전·핵연료 얘기이고 RI·의료·종사자 얘기가 없을 때
+OTHER_BODY = re.compile(r'발전용\s*원자로|원자로시설|원자력시설|핵연료주기|물리적\s*방호|원전|원자로조종')
+RI_BODY = re.compile(r'방사성동위원소|방사선작업종사자|의료|진단용|방사선발생장치|수정체|선량한도|판독')
 STAGES = ['입법예고', '법제처심사', '법제처심사완료', '차관회의', '국무회의', '국회제출', '공포대기', '공포']
 
 
@@ -72,8 +75,12 @@ def detail(kind, seq, typ):
     get = lambda k: (info.findtext(k) or '').strip()
     text = html.unescape(re.sub(r'<[^>]+>', ' ', html.unescape(get('lmPpCts') or get('admPpCts'))))
     text = re.sub(r'[ \t\xa0]+', ' ', text)
-    m = re.search(r'1\.\s*(?:제정|개정|폐지)?\s*이유\s*(?:및|와)?\s*주요\s*내용(.*?)(?=\n?\s*2\.\s*의견\s*제출|\Z)', text, re.S)
-    summary = re.sub(r'\s+', ' ', (m.group(1) if m else text)).strip()
+    # 공고문 = 머리말 → "1. 개정이유 및 주요내용"(또는 "1. 개정이유 / 2. 주요내용") → "N. 의견제출" → 문의처.
+    # 요지는 첫 "1. …이유"부터 "N. 의견제출" 앞까지. 형식이 달라 못 찾으면 의견제출 앞까지라도 자른다.
+    m = re.search(r'1\.\s*(?:제정|개정|폐지|제ㆍ개정|제·개정)?\s*이유(.*?)(?=\d\.\s*의견\s*제출|\Z)', text, re.S)
+    body = m.group(1) if m else re.split(r'\d\.\s*의견\s*제출', text)[0]
+    body = re.sub(r'^\s*(?:및|와)?\s*주요\s*내용\s*', '', body)
+    summary = re.sub(r'\s+', ' ', body).strip()
     names = [e.text.strip() for e in info.iter('FileName') if e.text]
     urls = [e.text.strip() for e in info.iter('FileDownUrl') if e.text]
     time.sleep(0.2)
@@ -124,7 +131,8 @@ def main():
                 'class': x.get('lsClsNm', ''), 'notice_no': x.get('pntcNo', ''), 'notice_date': iso(x.get('pntcDt')),
                 'start': start, 'end': end, 'open': bool(start and end and start <= today.isoformat() <= end),
                 'stage': st['lbPrcStsNm'] if st else '', 'stage_date': iso(st['lbPrcStsDt']) if st else '',
-                'topic': 'other' if OTHER.search(title) else 'ri-medical',
+                'topic': 'other' if OTHER.search(title) or OTHER_BODY.search(title) or (
+                    OTHER_BODY.search(det['summary']) and not RI_BODY.search(title + det['summary'])) else 'ri-medical',
                 'link': f'https://opinion.lawmaking.go.kr/gcom/{path}/{x[seq]}',
                 'current_admrul': x.get('mappingAdmRulSeq', ''), **det})
     items.sort(key=lambda i: (i['notice_date'], i['id']), reverse=True)
