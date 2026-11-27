@@ -22,7 +22,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query            # noqa: E402  (.env 로드 포함)
-from _prompt import SYS, SYS_UPCOMING, SYS_GUIDE     # noqa: E402
+from _prompt import SYS, SYS_UPCOMING, SYS_GUIDE, SYS_GUIDE_DIFF     # noqa: E402
 from _query import expand                 # noqa: E402
 from _verify import check                 # noqa: E402
 
@@ -34,6 +34,7 @@ UP_MAX, UP_CAP = 8, 6000   # 시행예정 자료는 덧붙임용이라 근거보
 # 지침(수검 가이드) — 법령과 다른 표·다른 답. 유사도가 이 값을 넘는 조각이 있을 때만 지침 답을 만든다.
 # 잠정값(2026-11-27, 질문 4개 실측: 관련 0.72~0.79 · 무관 0.67). 지침 평가 문항으로 다시 정할 것.
 GUIDE_K, GUIDE_MIN = 3, 0.70
+DIFF_MAX, DIFF_CAP = 2, 5000    # 차이 한 줄을 위해 넘기는 현행 조문 — 개정된 인용 조문 중 앞의 몇 개만
 
 
 def _rpc(name, body):
@@ -75,6 +76,11 @@ def kdate(d):
     return f'{y}년 {int(m)}월 {int(dd)}일'
 
 
+def _kst_today():
+    import datetime
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).date().isoformat()
+
+
 def qvec(question):
     return '[' + ','.join(f'{x:.7f}' for x in embed_query(expand(question))) + ']'   # 검색에만 용어 병기
 
@@ -85,24 +91,52 @@ def guide_title(g):
     return f"수검 가이드(2022) {' > '.join(crumbs)} (p.{m.get('printed_pages', '?')})"
 
 
-def ask_guide(question, vec):
+def current_article(cite, today):
+    """'원자력안전법 시행규칙 제121조' → 기준일 현행 본문(조각이 여럿이면 이어 붙임)."""
+    law, art = cite.rsplit(' ', 1)
+    url, key = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_ROLE_KEY']
+    r = requests.get(f'{url}/rest/v1/lawbot_chunks', timeout=60, headers={'apikey': key, 'Authorization': f'Bearer {key}'},
+                     params={'select': 'chunk_id,content', 'metadata->>law_title': f'eq.{law}', 'metadata->>article': f'eq.{art}',
+                             'metadata->>document_type': 'eq.law', 'effective_from': f'lte.{today}',
+                             'or': f'(effective_to.is.null,effective_to.gt.{today})', 'order': 'chunk_id'})
+    r.raise_for_status()
+    return '\n'.join(x['content'] for x in r.json())[:DIFF_CAP]
+
+
+def cited_only(sources, answer):
+    """「지침 근거」 줄이 가리킨 쪽(p.N)의 조각만 남긴다. 하나도 못 맞추면 전부 둔다. 런타임 ask.ts 와 같은 규칙."""
+    line = next((l for l in answer.splitlines() if l.strip().startswith('「지침 근거」')), '')
+    keep = [s for s in sources if (re.search(r'\(p\.[^)]*\)$', s['title']) or [''])[0] in line and line]
+    return keep or sources
+
+
+def ask_guide(question, vec, today=None):
     """지침 답. 관련 조각이 없으면 None(둘째 칸을 띄우지 않는다). 법령 답과 독립이다."""
     hits = [g for g in _rpc('lawbot_guide_match', {'query_embedding': vec, 'match_count': GUIDE_K})
             if g['similarity'] >= GUIDE_MIN]
     if not hits:
         return None
     body = '\n\n---\n\n'.join(f"[지침 {n}] {guide_title(g)}\n{g['content'][:CAP]}" for n, g in enumerate(hits, 1))
-    answer, usage = generate(f'{SYS_GUIDE}\n\n[지침 자료]\n{body}\n\n[질문]\n{question}')
-    if '「지침 근거」 없음' in answer or '해당 내용이 없습니다' in answer[:40]:
-        return None                    # 모델이 관련 없다고 본 경우 — 빈 칸을 띄우지 않는다
     changed, seen = [], set()
     for g in hits:                     # 지침이 인용한 조문 중 발간 뒤 개정·변경예정인 것(빌드 때 계산해 둔 값)
         for c in (g.get('metadata') or {}).get('cites_changed', []):
             if c['cite'] not in seen:
                 seen.add(c['cite'])
                 changed.append(c)
+    prompt = f'{SYS_GUIDE}'
+    amended = [c['cite'] for c in changed if c.get('amended')][:DIFF_MAX]
+    cur = [(c, current_article(c, today or _kst_today())) for c in amended]
+    cur = [(c, t) for c, t in cur if t]
+    if cur:
+        prompt += f'\n{SYS_GUIDE_DIFF}'
+    prompt += f'\n\n[지침 자료]\n{body}'
+    if cur:
+        prompt += '\n\n[현행 조문]\n' + '\n\n---\n\n'.join(f'[현행] {c}\n{t}' for c, t in cur)
+    answer, usage = generate(f'{prompt}\n\n[질문]\n{question}')
+    if '「지침 근거」 없음' in answer or '해당 내용이 없습니다' in answer[:40]:
+        return None                    # 모델이 관련 없다고 본 경우 — 빈 칸을 띄우지 않는다
     return {'answer': answer, 'changed': changed,
-            'sources': [{'chunk_id': g['chunk_id'], 'title': guide_title(g), 'similarity': round(g['similarity'], 3)} for g in hits],
+            'sources': cited_only([{'chunk_id': g['chunk_id'], 'title': guide_title(g), 'similarity': round(g['similarity'], 3)} for g in hits], answer),
             'usage': {'in': usage.get('promptTokenCount'), 'out': usage.get('candidatesTokenCount')}}
 
 
@@ -166,7 +200,7 @@ def ask(question, as_of=None):
     hits, up = retrieve(question, as_of, vec=vec)
     answer, usage = generate(build_prompt(question, hits, up, as_of))
     return {
-        'guide': ask_guide(question, vec),      # 지침 답(없으면 None) — 법령 답과 섞지 않는다
+        'guide': ask_guide(question, vec, as_of),      # 지침 답(없으면 None) — 법령 답과 섞지 않는다
         'question': question, 'as_of': as_of, 'answer': answer,
         'sources': [{'chunk_id': h['chunk_id'], 'title': disp(h), 'effective_from': h['effective_from'],
                      'effective_to': h.get('effective_to'), 'similarity': round(h['similarity'], 3)} for h in hits],
