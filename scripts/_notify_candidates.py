@@ -21,16 +21,20 @@ def ids_at(rev):
 def main():
     dry = '--dry-run' in sys.argv
     base = next((a.split('=', 1)[1] for a in sys.argv if a.startswith('--base=')), 'HEAD~1')
-    items = json.load(open(PATH, encoding='utf-8'))['items']
+    items = json.load(open(PATH, encoding='utf-8'))['items'] if os.path.exists(PATH) else []   # 후보가 한 번도 없었으면 파일이 없다
     old = ids_at(base)
     new = [it for it in items if it['id'] not in old and it.get('status') == 'new']
-    if not new:
+    test = '--test' in sys.argv              # 수동 실행: 후보가 없어도 배선(토큰·방) 확인용 한 줄을 보낸다
+    if not new and not test:
         print('알릴 새 후보 없음')
         return 0
-    lines = [f'📋 새 고시 후보 {len(new)}건 — 감시 목록에 없는 방사선 분야 행정규칙', '']
-    for it in new:
-        lines += [f"• {it['name']}", f"  {it['agency']} · {it['type']} {it['action']} · {it['issued']}", f"  {it['link']}", '']
-    lines.append('넣을 것이 있으면 Claude 에게 "그 고시 넣어"라고 하면 됩니다. 답하지 않으면 그대로 둡니다.')
+    if new:
+        lines = [f'📋 새 고시 후보 {len(new)}건 — 감시 목록에 없는 방사선 분야 행정규칙', '']
+        for it in new:
+            lines += [f"• {it['name']}", f"  {it['agency']} · {it['type']} {it['action']} · {it['issued']}", f"  {it['link']}", '']
+        lines.append('넣을 것이 있으면 Claude 에게 "그 고시 넣어"라고 하면 됩니다. 답하지 않으면 그대로 둡니다.')
+    else:
+        lines = ['🔧 새 고시 후보 알림 시험 발송 — 이 글이 보이면 배선 정상입니다. (새 후보 없음)']
     text = '\n'.join(lines)[:4000]
     tok, chat = os.environ.get('TELEGRAM_BOT_TOKEN'), os.environ.get('TELEGRAM_CHAT_ID')
     if dry or not tok or not chat:
