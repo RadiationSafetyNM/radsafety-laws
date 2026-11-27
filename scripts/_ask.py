@@ -203,7 +203,7 @@ def main():
               f"· {it['status']} · 시행 목표 {it.get('expected_effective', '미정')} · {it['confidence']}")
     g = out['guide']
     if g:
-        print('\n══ 수검 가이드(2022, KINS · 구속력 없음)\n' + g['answer'])
+        print('\n══ 수검 가이드(KINS 2022년판)\n' + g['answer'])
         for s_ in g['sources']:
             print(f"  {s_['similarity']:.3f} {s_['title']}")
         for c_ in g['changed']:
