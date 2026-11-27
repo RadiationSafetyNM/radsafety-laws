@@ -34,6 +34,10 @@ UP_MAX, UP_CAP = 8, 6000   # 시행예정 자료는 덧붙임용이라 근거보
 # 지침(수검 가이드) — 법령과 다른 표·다른 답. 유사도가 이 값을 넘는 조각이 있을 때만 지침 답을 만든다.
 # 잠정값(2026-11-27, 질문 4개 실측: 관련 0.72~0.79 · 무관 0.67). 지침 평가 문항으로 다시 정할 것.
 GUIDE_K, GUIDE_MIN = 3, 0.70
+GUIDE_POOL = 10        # 편(Part)으로 거르기 전 후보 수(lawbot_guide_match 상한)
+# 가이드는 수검자 종류별 세 편이고 같은 절 제목이 편마다 되풀이된다. 편을 가리지 않으면 허가사용자(병원) 질문에
+# 업무대행자 편 조각이 섞여 답에 들어간다(2026-11-27 운영 화면에서 확인). 질문 낱말로 한 편만 고른다 — 기본은 Part 1.
+PARTS = [('Part 2', ('업무대행',)), ('Part 3', ('운반', '포장', '운송'))]
 DIFF_MAX, DIFF_CAP = 2, 5000    # 차이 한 줄을 위해 넘기는 현행 조문 — 개정된 인용 조문 중 앞의 몇 개만
 
 
@@ -91,6 +95,11 @@ def guide_title(g):
     return f"수검 가이드(2022) {' > '.join(crumbs)} (p.{m.get('printed_pages', '?')})"
 
 
+def guide_part(question):
+    """질문이 가리키는 편. 런타임 ask.ts 의 guidePart() 와 같은 규칙."""
+    return next((p for p, words in PARTS if any(w in question for w in words)), 'Part 1')
+
+
 def current_article(cite, today):
     """'원자력안전법 시행규칙 제121조' → 기준일 현행 본문(조각이 여럿이면 이어 붙임)."""
     law, art = cite.rsplit(' ', 1)
@@ -112,8 +121,9 @@ def cited_only(sources, answer):
 
 def ask_guide(question, vec, today=None):
     """지침 답. 관련 조각이 없으면 None(둘째 칸을 띄우지 않는다). 법령 답과 독립이다."""
-    hits = [g for g in _rpc('lawbot_guide_match', {'query_embedding': vec, 'match_count': GUIDE_K})
-            if g['similarity'] >= GUIDE_MIN]
+    part = guide_part(question)
+    hits = [g for g in _rpc('lawbot_guide_match', {'query_embedding': vec, 'match_count': GUIDE_POOL})
+            if g['similarity'] >= GUIDE_MIN and (g.get('metadata') or {}).get('part', '').startswith(part)][:GUIDE_K]
     if not hits:
         return None
     body = '\n\n---\n\n'.join(f"[지침 {n}] {guide_title(g)}\n{g['content'][:CAP]}" for n, g in enumerate(hits, 1))
