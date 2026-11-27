@@ -150,7 +150,8 @@ def ask_guide(question, vec, today=None):
             'usage': {'in': usage.get('promptTokenCount'), 'out': usage.get('candidatesTokenCount')}}
 
 
-def retrieve(question, as_of=None, k=TOPK, vec=None):
+def retrieve(question, as_of=None, k=None, vec=None):
+    k = k or TOPK                      # 호출 시점 값 — 평가 스크립트가 TOPK 를 바꿔 가며 잰다
     vec = vec or qvec(question)
     hits = _rpc('lawbot_match', {'query_embedding': vec, 'match_count': k, 'as_of': as_of})
     up = _rpc('lawbot_upcoming', {'chunk_ids': [h['chunk_id'] for h in hits], 'as_of': as_of}) if hits else []
@@ -205,12 +206,12 @@ def pending(question, hits):
     return got
 
 
-def ask(question, as_of=None):
+def ask(question, as_of=None, guide=True):
     vec = qvec(question)
     hits, up = retrieve(question, as_of, vec=vec)
     answer, usage = generate(build_prompt(question, hits, up, as_of))
     return {
-        'guide': ask_guide(question, vec, as_of),      # 지침 답(없으면 None) — 법령 답과 섞지 않는다
+        'guide': ask_guide(question, vec, as_of) if guide else None,      # 지침 답(없으면 None) — 법령 답과 섞지 않는다
         'question': question, 'as_of': as_of, 'answer': answer,
         'sources': [{'chunk_id': h['chunk_id'], 'title': disp(h), 'effective_from': h['effective_from'],
                      'effective_to': h.get('effective_to'), 'similarity': round(h['similarity'], 3)} for h in hits],
