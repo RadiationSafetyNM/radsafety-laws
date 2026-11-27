@@ -20,16 +20,20 @@ python3 scripts/_collect_attachments_effective.py; rc2=$?
 # 고시(IP 무관)도 매일 — CI 는 주 1회이고 파싱 도구가 없다(2026-11-22)
 GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}" python3 scripts/_collect_admrul_effective.py || log "⚠ 고시 판본 수집 실패"
 python3 scripts/_collect_admrul_attachments_effective.py || log "⚠ 고시 별표 판본 수집 실패"
+# 감시 목록 밖의 새 고시 후보(2026-11-27) — 파일에 적히면 푸시 때 notify-candidates.yml 이 텔레그램으로 알린다
+python3 scripts/_admrul_new_watch.py || log "⚠ 새 고시 후보 조회 실패"
 [ $rc1 -ne 0 ] && log "⚠ _collect_eflaw 종료코드 $rc1 (2=API 실패 — IP 등록 확인)"
 [ $rc2 -ne 0 ] && log "⚠ _collect_attachments_effective 종료코드 $rc2"
 
 git add data/laws-effective data/attachments-effective data/admin-rules-effective
+[ -f data/admrul-candidates.json ] && git add data/admrul-candidates.json
 if git diff --cached --quiet; then
-    log "새 판본 없음"
+    log "새 판본·새 후보 없음"
     exit $(( rc1 | rc2 ))
 fi
 n=$(git diff --cached --name-only | grep -c '@')
-git commit -q -m "chore: 법령 시행일 판본 수집 $(date +%F) ($(hostname -s) 일일, 변경 ${n}건)" \
+c=$(git diff --cached --name-only | grep -c admrul-candidates)
+git commit -q -m "chore: 법령 시행일 판본 수집 $(date +%F) ($(hostname -s) 일일, 변경 ${n}건$([ "$c" -gt 0 ] && echo ' · 새 고시 후보'))" \
     -m "scripts/daily_effective.sh — push 로 update-laws.yml 이 청크 재생성·DB 인입을 이어 한다."
 # ssh push 가 끝나 놓고도 안 끝나는 일이 있어 timeout 후 원격 HEAD 로 판정한다
 timeout 90 git push -q origin HEAD:main

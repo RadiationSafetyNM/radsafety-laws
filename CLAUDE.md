@@ -156,6 +156,7 @@ python3 scripts/_freshness_audit.py <OC> data/laws    # OC = benkorea.ai (가입
 
 - **비교축은 `target=eflaw`(시행일법령)** — `현행연혁코드`(시행예정/현행/연혁)로 *공포됐으나 미시행* 개정까지 본다. lawSearch `target=law`(현행)는 시행 중 버전만 줘서 시행예정 개정을 STALE 로 오판하므로 쓰지 않는다.
 - **⚠️ IP 등록 필요**: 데이터 수집과 달리 이건 OpenAPI 직접호출이라 **호출 PC 공인 IP 가 open.law.go.kr 에 등록**돼야 한다(동적 IP면 변경 시 재등록). lawService 본문은 `MST=` 파라미터(`ID=`는 법령ID 기대 — 혼동주의). 함정 상세: 메모리 `reference_moleg_openapi_gotchas`.
+- **새 고시 후보(2026-11-27)**: 고시 감시 목록은 명시 목록이라 새로 제정되는 고시를 못 잡는다. `_admrul_new_watch.py` 가 일일 수집(`daily_effective.sh`) 때 최근 14일 발령분에서 목록 밖·제목이 방사선 분야인 것을 `data/admrul-candidates.json` 에 적고(한 번 적힌 ID 는 다시 안 올림), 푸시되면 `notify-candidates.yml` → `_notify_candidates.py` 가 텔레그램으로 알린다(secrets `TELEGRAM_BOT_TOKEN`·`TELEGRAM_CHAT_ID`). **보내기만 한다 — 편입은 사람이 정해 `watchlist.toml` 에 넣는다.** 후보 규칙: 제목 낱말('원자력' 제외) 또는 원안위 고시 제정. 실측 연 12건 안팎.
 - **매일 돌리는 쪽은 `_amend_watch.py`** (2026-11-20): 감사가 법령을 하나씩 조회해 표를 그린다면, 이쪽은 `ancYd`(법령)·`prmlYd`(고시) 기간 조회로 그 기간 공포분 전체를 받아 워치리스트와 교집합한다. 고시 축도 본다. `python3 scripts/_amend_watch.py [--days 14] [--format text|md|json]`. API 실패(등록 IP 변경 등)를 "개정 없음"으로 삼키지 않도록 exit 2 로 구분한다. 같은 날 공포본이 둘이면(일부개정+타법개정) 일련번호가 큰 쪽만 새 개정으로 본다.
 - **1차 실측(2026-06-29)**: 22/22 SYNC — 상류 지연 0건. 단 1회 스냅샷이라 *공포→legalize-kr 반영 며칠* cadence 측정은 시계열 반복 필요. 배경: 메모리 `project_radsafety_laws_freshness_lag`.
 - **OpenAPI 요청 파라미터·회신 필드 레퍼런스** → [`docs/law-go-kr-openapi.md`](docs/law-go-kr-openapi.md). `query`(법령명 전용) vs 전용 파라미터(`ancYd`·`org`·`efYd`…) 구분, 12 회신필드, 현행연혁코드 3값, 일일 개정감지 함의. 라이브 검증(✓)/미검증(○) 표기.

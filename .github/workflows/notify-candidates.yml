@@ -1,0 +1,25 @@
+name: Notify new 고시 candidates (새 고시 후보 알림)
+
+# 일일 수집 서버(scripts/daily_effective.sh → _admrul_new_watch.py)가 후보 파일을 푸시하면 텔레그램으로 알린다.
+# 보내기만 한다. 편입은 사람이 정한다(watchlist.toml).
+on:
+  push:
+    branches: [main]
+    paths: ['data/admrul-candidates.json']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Send
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 scripts/_notify_candidates.py --base=${{ github.event.before || 'HEAD~1' }}
