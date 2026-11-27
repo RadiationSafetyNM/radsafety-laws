@@ -28,7 +28,7 @@ from _verify import check                 # noqa: E402
 
 GEN_MODEL = os.environ.get('GEN_MODEL', 'gemini-3.6-flash')
 GEMINI_EP = 'https://generativelanguage.googleapis.com/v1beta'
-TOPK = 5
+TOPK = 8             # 2026-11-27 5→8: 다단계 질문에서 필요한 조문 인용 19→22/30, 나빠진 신호 없음, 입력 +48% (_topk_eval.py)
 CAP = 20000          # 근거 청크 본문 상한 — _rag_answer.py 와 같다(별표 표를 행 중간에서 자르지 않게)
 UP_MAX, UP_CAP = 8, 6000   # 시행예정 자료는 덧붙임용이라 근거보다 좁게 준다
 # 지침(수검 가이드) — 법령과 다른 표·다른 답. 유사도가 이 값을 넘는 조각이 있을 때만 지침 답을 만든다.
