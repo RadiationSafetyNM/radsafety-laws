@@ -54,5 +54,45 @@ def main():
               f' · +양방향 {both}/{n} (평균 {sum(add_both)/n:.1f}·최대 {max(add_both)})')
 
 
+MULTI = os.path.join(os.path.dirname(EVAL), 'lawbot-평가셋-다단계.yaml')
+
+
+def need_node(s):
+    """'원자력안전법 시행령 제82조의4' · '… 별표5의2' → 그래프 마디 이름."""
+    law, x = s.rsplit(' ', 1)
+    return f'{law}#{x}'
+
+
+def multihop(k=5):
+    """다단계 문항 — need(필요한 조문 전부) 중 몇 개가 근거로 잡히는가. 그대로 / +가리키는 조문 / +양방향."""
+    url, key = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_ROLE_KEY']
+    qs = yaml.safe_load(open(MULTI, encoding='utf-8'))['questions']
+    nodes = set(g) | set(rev)
+    tot = {'base': [0, 0], 'out': [0, 0], 'both': [0, 0]}     # [잡힌 need 수, 전부 잡힌 문항 수]
+    need_n, added = 0, {'out': [], 'both': []}
+    for q in qs:
+        need = [need_node(x) for x in q['need']]
+        bad = [n for n in need if n not in nodes]
+        if bad:
+            print(f"  ⚠ {q['id']} 그래프에 없는 마디 {bad}")
+        rows = rpc_match(url, key, embed_query(expand(q['question'])), k)
+        have = {node_of(r['metadata']) for r in rows} - {None}
+        o = set().union(*[set(g.get(n, [])) for n in have]) - have
+        i = set().union(*[rev.get(n, set()) for n in have]) - have
+        sets = {'base': have, 'out': have | o, 'both': have | o | i}
+        got = {m: [n for n in need if n in s_] for m, s_ in sets.items()}
+        need_n += len(need)
+        for m in tot:
+            tot[m][0] += len(got[m]); tot[m][1] += len(got[m]) == len(need)
+        added['out'].append(len(o)); added['both'].append(len(o | i))
+        miss = [n.split('#')[1] for n in need if n not in sets['base']]
+        print(f"  {q['id']:>3} 그대로 {len(got['base'])}/{len(need)} · +가리키는 {len(got['out'])}/{len(need)} · +양방향 {len(got['both'])}/{len(need)}"
+              f" · 더해짐 {len(o)}/{len(o | i)} · 그대로일 때 빠진 것 {miss}")
+    n = len(qs)
+    for m, label in (('base', '그대로'), ('out', '+가리키는 조문'), ('both', '+양방향')):
+        extra = f" · 더해지는 조문 평균 {sum(added[m]) / n:.1f}·최대 {max(added[m])}" if m in added else ''
+        print(f'── {label}: 필요한 조문 {tot[m][0]}/{need_n} · 전부 잡힌 문항 {tot[m][1]}/{n}{extra}')
+
+
 if __name__ == '__main__':
-    main()
+    multihop() if '--multihop' in sys.argv else main()
