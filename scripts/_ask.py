@@ -93,6 +93,8 @@ def ask_guide(question, vec):
         return None
     body = '\n\n---\n\n'.join(f"[지침 {n}] {guide_title(g)}\n{g['content'][:CAP]}" for n, g in enumerate(hits, 1))
     answer, usage = generate(f'{SYS_GUIDE}\n\n[지침 자료]\n{body}\n\n[질문]\n{question}')
+    if '「지침 근거」 없음' in answer or '해당 내용이 없습니다' in answer[:40]:
+        return None                    # 모델이 관련 없다고 본 경우 — 빈 칸을 띄우지 않는다
     changed, seen = [], set()
     for g in hits:                     # 지침이 인용한 조문 중 발간 뒤 개정·변경예정인 것(빌드 때 계산해 둔 값)
         for c in (g.get('metadata') or {}).get('cites_changed', []):
