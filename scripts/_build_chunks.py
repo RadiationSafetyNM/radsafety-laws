@@ -436,6 +436,12 @@ def attachment_segments(body):
                     first(rows[k]) == first(rows[k - 1]) or first(rows[k]) == first(rows[k + 1])):
                 k += 1
             header, data = '\n'.join(rows[:k]), rows[k:]
+            # 표 바로 위의 "(단위: 만원)" 은 표의 일부다 — 머리글에 붙여 조각마다 따라가게 한다.
+            # 떼어 두면 금액 행만 든 조각에서 "300" 이 무엇의 300 인지 잃는다(과태료 별표, 2026-11-27).
+            above = (segs[-1][1] if segs else '')[-80:] + '\n' + pre[-80:]
+            unit = re.findall(r'[(（]\s*단위\s*[:：][^)）\n]{1,30}[)）]', above)
+            if unit and unit[-1] not in header:
+                header = unit[-1] + '\n' + header
             if not data:                       # 헤더뿐인 표
                 segs.append((f'표{tidx}', header))
             def _pack(lines, a, b):
