@@ -22,7 +22,9 @@ def main():
         r = json.loads(line)
         text = r['content'][:EMB_CAP]
         rows.append({'chunk_id': r['chunk_id'], 'content': r['content'], '_t': text,
-                     'metadata': {**r['metadata'], 'content_sha': hashlib.sha256(text.encode()).hexdigest()[:16]}})
+                     # 지문에 metadata 도 넣는다 — 본문은 그대로인데 인용 조문의 개정 여부(cites_changed)만 바뀌는 날이 있다
+                     'metadata': {**r['metadata'], 'content_sha': hashlib.sha256(
+                         (text + json.dumps(r['metadata'], ensure_ascii=False, sort_keys=True)).encode()).hexdigest()[:16]}})
     ids = [r['chunk_id'] for r in rows]
     assert len(ids) == len(set(ids)), 'chunk_id 중복'
     print(f'지침 청크 {len(rows)} · 임베딩 절단 {EMB_CAP}자 초과 {sum(len(r["content"]) > EMB_CAP for r in rows)}건')

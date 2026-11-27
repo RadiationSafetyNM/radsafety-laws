@@ -46,7 +46,39 @@ def cites(text, bare=False):
     return got
 
 
+PUBLISHED = '2022-10-31'      # 개정 6판 발행 2022년 10월(판권 쪽) — 이 뒤의 개정은 지침에 반영되지 않았다
+LAWS = f'{ROOT}/data/chunks/law_chunk_versions.jsonl'
+
+
+def law_status(today):
+    """(법령명, 조) → {'amended': 발간 뒤 마지막 개정일, 'upcoming': 시행예정 변경일}. 현행 판본 본문의 <개정 …> 꼬리표 기준."""
+    cur, up = {}, {}
+    for line in open(LAWS, encoding='utf-8'):
+        d = json.loads(line)
+        m = d['metadata']
+        if m.get('document_type') != 'law':
+            continue
+        k = (m['law_title'], m['article'])
+        if d['effective_from'] <= today and (d['effective_to'] is None or d['effective_to'] > today):
+            cur.setdefault(k, []).append(d['content'])
+            if d['effective_to']:
+                up[k] = min(up.get(k, '9999'), d['effective_to'])
+        elif d['effective_from'] > today:
+            up[k] = min(up.get(k, '9999'), d['effective_from'])
+    out = {}
+    for k, bodies in cur.items():
+        tags = ' '.join(t for b in bodies for t in re.findall(r'<(?:개정|신설|본조신설|전문개정)[^>]*>', b))
+        ds = [f'{y}-{int(mo):02d}-{int(dd):02d}' for y, mo, dd in re.findall(r'(20\d\d)\.\s?(\d+)\.\s?(\d+)', tags)]
+        last = max(ds, default='')
+        if last > PUBLISHED or k in up:
+            out[k] = {'amended': last if last > PUBLISHED else None, 'upcoming': up.get(k)}
+    return out, set(cur)
+
+
 def main():
+    import datetime
+    status, known = law_status(str(datetime.date.today()))
+    unknown = set()
     chunks, cur = [], None
     path = {'part': '', 'chap': '', 'sec': '', 'sub': '', 'sub2': ''}
 
@@ -111,6 +143,14 @@ def main():
         key = 'kins2022#' + '/'.join(re.sub(r'[^0-9A-Za-z가-힣ⅠⅡⅢⅣ]', '', x)[:14] for x in crumbs[:1] + crumbs[1:])
         seen[key] = seen.get(key, 0) + 1
         cid = key if seen[key] == 1 else f'{key}_p{seen[key]}'
+        cs = cites(body, bare='위반에 따른 행정처분' in p['chap'])
+        changed = []
+        for c_ in cs:
+            law, art = c_.rsplit(' ', 1)
+            if (law, art) not in known:
+                unknown.add(c_)
+            elif (law, art) in status:
+                changed.append({'cite': c_, **status[(law, art)]})
         printed = f"{c['pages'][0] - 6}" + (f"~{c['pages'][-1] - 6}" if len(c['pages']) > 1 else '')
         rows.append({
             'chunk_id': cid, 'effective_from': '2022-01-01', 'effective_to': None,
@@ -118,7 +158,7 @@ def main():
             'metadata': {'document_type': 'guide', 'guide_id': 'kins2022', 'law_title': GUIDE,
                          'publisher': '한국원자력안전기술원(KINS)', 'edition': '2022', 'binding': False,
                          'part': p['part'], 'chapter': p['chap'], 'section': p['sec'], 'subsection': ' > '.join(x for x in (p['sub'], p['sub2']) if x),
-                         'pdf_pages': c['pages'], 'printed_pages': printed, 'cites': cites(body, bare='위반에 따른 행정처분' in p['chap'])}})
+                         'pdf_pages': c['pages'], 'printed_pages': printed, 'cites': cs, 'cites_changed': changed}})
     ids = [r['chunk_id'] for r in rows]
     if len(ids) != len(set(ids)):
         sys.exit('chunk_id 중복 — 산출하지 않음')
@@ -128,6 +168,7 @@ def main():
     src = sum(len(re.sub(r'\s', '', open(x, encoding='utf-8').read())) for x in glob.glob(f'{PAGES}/p*.md'))
     out = sum(len(re.sub(r'\s', '', ''.join(c['lines']))) for c in merged)
     print(f'청크 {len(rows)} · 본문 {out:,}자(공백 제외) / 전사본 전체 {src:,}자 · 최장 {max(len(r["content"]) for r in rows)} · 최단 {min(len(r["content"]) for r in rows)}')
+    print(f'인용 조문 중 발간(2022-10) 뒤 개정·변경예정이 있는 청크 {sum(bool(r["metadata"]["cites_changed"]) for r in rows)} · 현행 법령에서 못 찾은 인용 {sorted(unknown)}')
     if '-v' in sys.argv:
         for r in rows:
             print(f"{len(r['content']):5d} {r['chunk_id']}  cites={len(r['metadata']['cites'])}")

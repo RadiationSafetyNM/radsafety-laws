@@ -22,7 +22,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _embed import embed_query            # noqa: E402  (.env 로드 포함)
-from _prompt import SYS, SYS_UPCOMING     # noqa: E402
+from _prompt import SYS, SYS_UPCOMING, SYS_GUIDE     # noqa: E402
 from _query import expand                 # noqa: E402
 from _verify import check                 # noqa: E402
 
@@ -31,6 +31,9 @@ GEMINI_EP = 'https://generativelanguage.googleapis.com/v1beta'
 TOPK = 5
 CAP = 20000          # 근거 청크 본문 상한 — _rag_answer.py 와 같다(별표 표를 행 중간에서 자르지 않게)
 UP_MAX, UP_CAP = 8, 6000   # 시행예정 자료는 덧붙임용이라 근거보다 좁게 준다
+# 지침(수검 가이드) — 법령과 다른 표·다른 답. 유사도가 이 값을 넘는 조각이 있을 때만 지침 답을 만든다.
+# 잠정값(2026-11-27, 질문 4개 실측: 관련 0.72~0.79 · 무관 0.67). 지침 평가 문항으로 다시 정할 것.
+GUIDE_K, GUIDE_MIN = 3, 0.70
 
 
 def _rpc(name, body):
@@ -72,8 +75,37 @@ def kdate(d):
     return f'{y}년 {int(m)}월 {int(dd)}일'
 
 
-def retrieve(question, as_of=None, k=TOPK):
-    vec = '[' + ','.join(f'{x:.7f}' for x in embed_query(expand(question))) + ']'   # 검색에만 용어 병기
+def qvec(question):
+    return '[' + ','.join(f'{x:.7f}' for x in embed_query(expand(question))) + ']'   # 검색에만 용어 병기
+
+
+def guide_title(g):
+    m = g.get('metadata') or {}
+    crumbs = [x for x in (m.get('part'), m.get('section') or m.get('chapter'), m.get('subsection')) if x]
+    return f"수검 가이드(2022) {' > '.join(crumbs)} (p.{m.get('printed_pages', '?')})"
+
+
+def ask_guide(question, vec):
+    """지침 답. 관련 조각이 없으면 None(둘째 칸을 띄우지 않는다). 법령 답과 독립이다."""
+    hits = [g for g in _rpc('lawbot_guide_match', {'query_embedding': vec, 'match_count': GUIDE_K})
+            if g['similarity'] >= GUIDE_MIN]
+    if not hits:
+        return None
+    body = '\n\n---\n\n'.join(f"[지침 {n}] {guide_title(g)}\n{g['content'][:CAP]}" for n, g in enumerate(hits, 1))
+    answer, usage = generate(f'{SYS_GUIDE}\n\n[지침 자료]\n{body}\n\n[질문]\n{question}')
+    changed, seen = [], set()
+    for g in hits:                     # 지침이 인용한 조문 중 발간 뒤 개정·변경예정인 것(빌드 때 계산해 둔 값)
+        for c in (g.get('metadata') or {}).get('cites_changed', []):
+            if c['cite'] not in seen:
+                seen.add(c['cite'])
+                changed.append(c)
+    return {'answer': answer, 'changed': changed,
+            'sources': [{'chunk_id': g['chunk_id'], 'title': guide_title(g), 'similarity': round(g['similarity'], 3)} for g in hits],
+            'usage': {'in': usage.get('promptTokenCount'), 'out': usage.get('candidatesTokenCount')}}
+
+
+def retrieve(question, as_of=None, k=TOPK, vec=None):
+    vec = vec or qvec(question)
     hits = _rpc('lawbot_match', {'query_embedding': vec, 'match_count': k, 'as_of': as_of})
     up = _rpc('lawbot_upcoming', {'chunk_ids': [h['chunk_id'] for h in hits], 'as_of': as_of}) if hits else []
     return hits, up[:UP_MAX]
@@ -128,9 +160,11 @@ def pending(question, hits):
 
 
 def ask(question, as_of=None):
-    hits, up = retrieve(question, as_of)
+    vec = qvec(question)
+    hits, up = retrieve(question, as_of, vec=vec)
     answer, usage = generate(build_prompt(question, hits, up, as_of))
     return {
+        'guide': ask_guide(question, vec),      # 지침 답(없으면 None) — 법령 답과 섞지 않는다
         'question': question, 'as_of': as_of, 'answer': answer,
         'sources': [{'chunk_id': h['chunk_id'], 'title': disp(h), 'effective_from': h['effective_from'],
                      'effective_to': h.get('effective_to'), 'similarity': round(h['similarity'], 3)} for h in hits],
@@ -165,6 +199,13 @@ def main():
     for it in out['pending']:
         print(f"── 입법 진행 중(확정 아님): {it['title']} — {it['current']} → {it['proposed']} "
               f"· {it['status']} · 시행 목표 {it.get('expected_effective', '미정')} · {it['confidence']}")
+    g = out['guide']
+    if g:
+        print('\n══ 수검 가이드(2022, KINS · 구속력 없음)\n' + g['answer'])
+        for s_ in g['sources']:
+            print(f"  {s_['similarity']:.3f} {s_['title']}")
+        for c_ in g['changed']:
+            print(f"  ⚠ 지침 발간 뒤 변경: {c_['cite']}" + (f" 개정 {c_['amended']}" if c_['amended'] else '') + (f" · {c_['upcoming']} 변경 예정" if c_['upcoming'] else ''))
     c = out['checks']
     print(f"── 검증: 근거 강도 {c['strength']}({c['top']}) · 원문에 없는 수치 {c['unsupportedNumbers'] or '없음'}"
           f" · 검색 근거에 없는 인용 {c['uncitedRefs'] or '없음'}")
