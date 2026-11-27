@@ -246,7 +246,9 @@ import html as _html
 TABLE_RE = re.compile(r'<table.*?</table>', re.S | re.I)
 TR_RE = re.compile(r'<tr.*?</tr>', re.S | re.I)
 CELL_RE = re.compile(r'<t[dh][^>]*>(.*?)</t[dh]>', re.S | re.I)
-TAG_RE = re.compile(r'<[^>]+>')
+# 태그는 글자로 시작하고 한 줄 안에서 닫힌다. 예전 `<[^>]+>` 는 본문의 부등호까지 태그로 보아
+# "에너지 < 10 keV … > 20 MeV" 사이를 통째로 지웠다(방사선 가중치 별표, 2026-11-27 보존 검사에서 발견).
+TAG_RE = re.compile(r'</?[A-Za-z가-힣!][^>\n]*>')
 
 
 def _cell(s):
@@ -257,13 +259,135 @@ def _plain(s):
     return re.sub(r'\n{3,}', '\n\n', _html.unescape(TAG_RE.sub('', s))).strip()
 
 
-def _rows(tbl):
-    out = []
+_TBL_TOK = re.compile(r'(<table[^>]*>|</table>)', re.I)
+
+
+def _unnest(body):
+    """표 안에 표가 든 경우 **바깥 표의 껍데기만 벗긴다**(2026-11-27). 한글 별표는 문서 전체를 한 칸짜리 표로
+    감싸고 그 안에 진짜 표를 두는 일이 많다(선량한도 별표). 껍데기를 그대로 두면 안쪽 표의 첫 칸 속성(rowspan)을
+    바깥 칸의 것으로 잘못 읽어 머리글이 한 칸씩 밀린다."""
+    while True:
+        toks, depth, start, nested, spans = _TBL_TOK.split(body), 0, None, False, []
+        for i, t in enumerate(toks):
+            if t.lower().startswith('<table'):
+                if depth == 0:
+                    start, nested = i, False
+                else:
+                    nested = True
+                depth += 1
+            elif t.lower() == '</table>' and depth:
+                depth -= 1
+                if depth == 0 and nested:
+                    spans.append((start, i))
+        if not spans:
+            return body
+        for a, b in spans:
+            toks[a] = toks[b] = '\n'
+            d = 0
+            for i in range(a + 1, b):
+                t = toks[i]
+                if t.lower().startswith('<table'):
+                    d += 1
+                elif t.lower() == '</table>':
+                    d -= 1
+                elif d == 0:                       # 바깥 표에 직접 속한 글 — 행·칸 태그만 지운다
+                    toks[i] = re.sub(r'</?t[rdh][^>]*>|</?t(?:body|head)[^>]*>', '\n', t, flags=re.I)
+        body = ''.join(toks)
+
+
+WIDE_COLS = 12         # 열 압축 뒤에도 이보다 넓으면 가로 병합을 되풀이하지 않는다
+FILL_MAX = 40          # 병합 칸을 되풀이해 채우는 값의 최대 길이(이름표로 보는 한계)
+CELLA_RE = re.compile(r'<t[dh]([^>]*)>(.*?)</t[dh]>', re.S | re.I)
+_span = lambda attr, name: int((re.search(name + r'\s*=\s*"?(\d+)', attr, re.I) or [0, 1])[1])
+
+
+def _grid(tbl):
+    """표 → 칸을 다 채운 격자 [[(칸번호, 값)…]…]. **병합 칸(rowspan·colspan)을 풀어 걸친 자리마다 같은 칸을 둔다**(2026-11-27).
+
+    왜: 병합 칸을 그대로 두면 행마다 칸 수가 달라 "이 값이 어느 열의 값인가"를 잃는다.
+      · 머리글이 두세 줄인 표(교육 시간표: 신규교육 > 기본교육/직장교육)는 값과 열 제목의 짝이 풀리고,
+      · 첫 열이 여러 행에 걸친 표는 조각 경계에서 이름 없는 행이 남는다.
+    한글 표는 눈에 안 보이는 잔 열 수십 개 위에 그려진 것이 많다(colspan 19 같은 값) — 그대로 펴면 같은 값이
+    수십 번 되풀이된다. 그래서 **어느 행에서도 나뉘지 않는 이웃 열은 하나로 합친다**(_rows 의 열 압축)."""
+    grid, carry, cid = [], {}, 0             # carry: 열 번호 → (칸, 아래로 남은 행 수)
     for tr in TR_RE.findall(tbl):
-        cells = [_cell(c) for c in CELL_RE.findall(tr)]
-        if any(cells):
-            out.append(' | '.join(cells))
+        row, c, cells = [], 0, iter(CELLA_RE.findall(tr))
+        while True:
+            if c in carry:
+                cell, n = carry[c]
+                row.append(cell)
+                if n > 1:
+                    carry[c] = (cell, n - 1)
+                else:
+                    del carry[c]
+                c += 1
+                continue
+            nxt = next(cells, None)
+            if nxt is None:
+                later = [k for k in carry if k > c]
+                if not later:
+                    break
+                row += [(None, '')] * (min(later) - c)      # 이월 칸 앞의 빈 자리
+                c = min(later)
+                continue
+            attr, txt = nxt
+            cid += 1
+            cell, rs = (cid, _cell(txt)), _span(attr, 'rowspan')
+            for _ in range(_span(attr, 'colspan')):
+                row.append(cell)
+                if rs > 1:
+                    carry[c] = (cell, rs - 1)
+                c += 1
+        if any(v for _, v in row):
+            grid.append(row)
+    return grid
+
+
+def _rows(tbl):
+    grid = _grid(tbl)
+    if not grid:
+        return []
+    width = max(len(r) for r in grid)
+    grid = [r + [(None, '')] * (width - len(r)) for r in grid]
+    # 열 압축 — 모든 행에서 왼쪽 이웃과 같은 칸인 열은 실제로 나뉜 적이 없는 열이다
+    keep = [c for c in range(width) if c == 0 or any(r[c][0] != r[c - 1][0] or r[c][0] is None for r in grid)]
+    # 압축하고도 열이 많은 표는 한 <table> 안에 구획마다 열 나눔이 다른 표가 여럿 든 것이다(특수의료장비 품질관리
+    # 검사기준: 잔 열 60여 개). 가로로 되풀이해도 열이 맞지 않고 분량만 는다 — 가로 병합은 한 번만 적는다.
+    wide = len(keep) > WIDE_COLS
+    out, seen_above = [], set()
+    for r in grid:
+        cells = [r[c] for c in keep]
+        if wide:
+            cells = [x for n, x in enumerate(cells) if n == 0 or x[0] is None or x[0] != cells[n - 1][0]]
+            while cells and not cells[-1][1]:
+                cells.pop()
+        ids = {i for i, v in cells if v}
+        if len(ids) == 1 and all(i in ids or not v for i, v in cells):
+            v = next(v for _, v in cells if v)
+            if next(iter(ids)) not in seen_above or len(v) <= FILL_MAX:
+                out.append(v)                # 표 너비 전체에 걸친 칸(제목·비고) — 한 번만 적는다
+            seen_above |= ids
+            continue
+        line, prev = [], None
+        for i, v in cells:
+            # 되풀이하는 것은 이름표 같은 짧은 칸뿐 — 긴 칸(설명문)은 처음 한 번만 적고 뒤는 비운다
+            again = i is not None and (i == prev or i in seen_above)
+            line.append('' if again and len(v) > FILL_MAX else v)
+            prev = i
+        seen_above |= {i for i, _ in cells if i is not None}
+        out.append(' | '.join(line))
     return out
+
+
+def _plain_tables(s):
+    """짧은 별표용 — 표는 행 단위(` | `)로 펴고 나머지는 평문. 전에는 태그만 지워 칸마다 한 줄이 됐다
+    (표 있는 별표 84건 중 59건이 값과 열 제목의 짝을 잃고 있었다 — 2026-11-27)."""
+    parts, pos = [], 0
+    for m in TABLE_RE.finditer(s):
+        parts += [_plain(s[pos:m.start()]), '\n'.join(_rows(m.group(0)))]
+        pos = m.end()
+    parts.append(_plain(s[pos:]))
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(x for x in parts if x)).strip()
 
 
 def _seg_index(header, lines):
@@ -283,8 +407,9 @@ def _seg_index(header, lines):
 
 def attachment_segments(body):
     """[(subunit라벨, 조각)] — 표는 행 패킹 + 헤더 반복, 표 밖 텍스트는 그대로."""
+    body = _unnest(body)
     if len(_plain(body)) <= MAXCHARS and len(body) <= MAXCHARS * 3:
-        return [('', _plain(body))]           # 서술형·짧은 표 → 통짜
+        return [('', _plain_tables(body))]    # 서술형·짧은 표 → 통짜(표는 행 단위로)
     segs, pos, tidx = [], 0, 0
     for m in TABLE_RE.finditer(body):
         pre = _plain(body[pos:m.start()])
@@ -292,8 +417,25 @@ def attachment_segments(body):
             segs.append(('', pre))
         tidx += 1
         rows = _rows(m.group(0))
+        # 머리글 = **처음 나오는 여러 칸짜리 행**(+ 첫 칸이 이어지는 다단 머리글, 최대 4행). 그 앞의 한 칸짜리 행은
+        # 표 위에 얹힌 글(제목·일반기준)이다. 전에는 무조건 첫 행을 머리글로 삼아, 과태료·처분기준 별표처럼
+        # 표가 긴 「일반기준」 글로 시작하면 그 1,500자가 조각마다 되풀이되고 진짜 열 제목(1차·2차·3차 위반)은
+        # 첫 조각에만 남았다 — 조각들이 서로 닮아 검색이 안 되고 금액이 어느 차수인지도 잃었다(2026-11-27).
+        h = next((i for i, r in enumerate(rows) if ' | ' in r), None)
+        if h is None:
+            if rows:
+                segs.append(('', '\n'.join(rows)))
+            rows = []
+        elif h:
+            segs.append(('', '\n'.join(rows[:h])))
+            rows = rows[h:]
         if rows:
-            header, data = rows[0], rows[1:]
+            first = lambda r: r.split(' | ')[0]
+            k = 1
+            while k < min(4, len(rows) - 1) and ' | ' in rows[k] and (
+                    first(rows[k]) == first(rows[k - 1]) or first(rows[k]) == first(rows[k + 1])):
+                k += 1
+            header, data = '\n'.join(rows[:k]), rows[k:]
             if not data:                       # 헤더뿐인 표
                 segs.append((f'표{tidx}', header))
             def _pack(lines, a, b):
@@ -316,7 +458,7 @@ def attachment_segments(body):
     tail = _plain(body[pos:])
     if tail:
         segs.append(('', tail))
-    return segs or [('', _plain(body))]
+    return segs or [('', _plain_tables(body))]
 
 
 # ⚠️ 닫는 괄호가 **전각 ］(U+FF3D)** 인 별표가 있다(HWP 원문 그대로). 반각만 받으면 번호
